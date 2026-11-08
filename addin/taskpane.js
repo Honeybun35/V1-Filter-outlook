@@ -1,12 +1,19 @@
-/* Seitenleiste "Auftrags-Check" für Outlook (Office.js, Mailbox 1.8) */
+/* Seitenleiste "Auftrags-Check" für Outlook (Office.js, Mailbox 1.8)
+ * Reiter 1 "Diese Mail": Kernaussage (Was / Bis wann / Anhang), Bearbeiter + Status, Aktivität, Verlauf
+ * Reiter 2 "Übersicht": alle Mails mit Filter nach MA und Status (Datenquelle: später Microsoft Graph) */
 (function () {
   'use strict';
 
   var STATUS = ['Warten', 'Daten folgen', 'In Bearbeitung', 'GZD warten', 'Erledigt'];
+  // Schriftfarbe je Status (Akzent, sonst ist alles weiß)
+  var STATUS_FARBE = {
+    'Warten': '#b7791f', 'Daten folgen': '#c05621', 'In Bearbeitung': '#2b6cb0',
+    'GZD warten': '#6b46c1', 'Erledigt': '#2f855a'
+  };
   var SEP = ' · ';
   var STATUS_RE = new RegExp('^(.+?)' + SEP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(' + STATUS.join('|') + ')$');
   var TEAM = window.TEAM || [];
-  var DEFAULT_TEAM = TEAM.map(function (t) { return t.kuerzel; });
+  var CORE = ['menge', 'format', 'termin', 'daten']; // Was (Menge, Format), Bis wann, Anhang
 
   function person(k) {
     for (var i = 0; i < TEAM.length; i++) if (TEAM[i].kuerzel === k) return TEAM[i];
@@ -17,43 +24,51 @@
     demo: false,
     item: null,
     analysis: null,
-    categories: [],      // Anzeigenamen der Kategorien der aktuellen Mail
+    categories: [],
     me: '',
-    team: DEFAULT_TEAM.slice(),
+    team: TEAM.map(function (t) { return t.kuerzel; }),
     person: '',
-    na: {},              // pro Mail: Felder, die als "nicht nötig" markiert sind
-    itemKey: ''
+    itemKey: '',
+    subject: '',
+    log: [],
+    props: null,
+    demoLogs: {},
+    demoCats: {},
+    detailsInReply: false,
+    overview: { items: [], q: '', ma: 'alle', st: 'alle', sort: 'wichtig' }
   };
 
   var $ = function (id) { return document.getElementById(id); };
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
 
   // ---------- Einstellungen ----------
   function loadSettings() {
     var me = '';
     try {
-      if (!state.demo && Office.context.roamingSettings) {
-        me = Office.context.roamingSettings.get('me') || '';
-      } else {
-        me = localStorage.getItem('ac_me') || '';
-      }
+      if (!state.demo && Office.context.roamingSettings) me = Office.context.roamingSettings.get('me') || '';
+      else me = localStorage.getItem('ac_me') || '';
     } catch (e) { /* ignorieren */ }
     state.me = me;
-    state.team = DEFAULT_TEAM.slice();
     state.person = me || state.team[0];
     var sel = $('meSelect');
     sel.innerHTML = '<option value="">– bitte wählen –</option>';
     TEAM.forEach(function (t) {
-      var o = document.createElement('option');
-      o.value = t.kuerzel; o.textContent = t.name + ' (' + t.kuerzel + ')';
+      var o = el('option', null, t.name);
+      o.value = t.kuerzel;
       sel.appendChild(o);
     });
     sel.value = me;
+    applyMe();
   }
 
   function saveSettings() {
     var me = $('meSelect').value;
     state.me = me;
-    state.person = me || state.team[0];
     try {
       if (!state.demo && Office.context.roamingSettings) {
         Office.context.roamingSettings.set('me', me);
@@ -65,8 +80,18 @@
     } catch (e) {
       $('settingsMsg').textContent = 'Konnte nicht gespeichert werden.';
     }
+    applyMe();
     syncPersonFromCategories();
     render();
+  }
+
+  // Akzentfarbe der Oberfläche = Farbe der eigenen Person
+  function applyMe() {
+    var p = state.me ? person(state.me) : null;
+    document.documentElement.style.setProperty('--accent', p ? p.farbe : '#374151');
+    var tag = $('meTag');
+    tag.textContent = p ? p.kuerzel : '';
+    tag.style.color = p ? p.farbe : '';
   }
 
   // ---------- Mail laden ----------
@@ -78,16 +103,52 @@
     var subject = item.subject || '';
     var attachments = (item.attachments || []).map(function (a) { return a.name; });
 
-    item.body.getAsync(Office.CoercionType.Text, function (res) {
-      var text = (res.status === Office.AsyncResultStatus.Succeeded) ? res.value : '';
+    holeMailtext(item, function (text) {
       readCategories(function () {
-        var from = (item.from && (item.from.displayName || item.from.emailAddress)) || '';
-        state.analysis = Auftrag.analyse({ subject: subject, text: text, attachments: attachments, from: from });
-        state.subject = subject;
-        syncPersonFromCategories();
-        render();
+        loadLog(function () {
+          var from = (item.from && (item.from.displayName || item.from.emailAddress)) || '';
+          state.analysis = Auftrag.analyse({ subject: subject, text: text, attachments: attachments, from: from });
+          state.subject = subject;
+          syncPersonFromCategories();
+          render();
+        });
       });
     });
+  }
+
+  // Mailtext holen. Manche Outlook-Versionen liefern den Text ohne Zeilenumbrüche.
+  // Dann wird der HTML-Text geholt und selbst in Zeilen zerlegt.
+  function holeMailtext(item, done) {
+    item.body.getAsync(Office.CoercionType.Text, function (res) {
+      var text = (res.status === Office.AsyncResultStatus.Succeeded) ? (res.value || '') : '';
+      var zeilen = (text.match(/\n/g) || []).length;
+      if (text.length < 120 || zeilen >= 3) { done(text); return; }
+      item.body.getAsync(Office.CoercionType.Html, function (hr) {
+        if (hr.status !== Office.AsyncResultStatus.Succeeded || !hr.value) { done(text); return; }
+        var t = htmlZuText(hr.value);
+        done(t.length >= text.length * 0.5 ? t : text);
+      });
+    });
+  }
+
+  function htmlZuText(html) {
+    try {
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var i, rm = doc.querySelectorAll('script,style,head');
+      for (i = 0; i < rm.length; i++) rm[i].parentNode.removeChild(rm[i]);
+      var br = doc.querySelectorAll('br');
+      for (i = 0; i < br.length; i++) br[i].parentNode.replaceChild(doc.createTextNode('\n'), br[i]);
+      var li = doc.querySelectorAll('li');
+      for (i = 0; i < li.length; i++) li[i].insertBefore(doc.createTextNode('- '), li[i].firstChild);
+      var blk = doc.querySelectorAll('p,h1,h2,h3,h4,h5,h6,blockquote');
+      for (i = 0; i < blk.length; i++) blk[i].appendChild(doc.createTextNode('\n\n'));
+      var row = doc.querySelectorAll('div,li,tr,table,ul,ol');
+      for (i = 0; i < row.length; i++) row[i].appendChild(doc.createTextNode('\n'));
+      var t = (doc.body ? doc.body.textContent : '') || '';
+      return t.replace(/ /g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{4,}/g, '\n\n\n');
+    } catch (e) {
+      return '';
+    }
   }
 
   function readCategories(done) {
@@ -122,236 +183,322 @@
     }
   }
 
-  function showEmpty() {
-    state.item = null; state.analysis = null;
-    $('subject').textContent = 'Keine Mail geöffnet';
-    $('checklist').innerHTML = '';
-    $('counter').textContent = '';
-    $('replyBtn').hidden = true; $('replyHint').hidden = true;
-    $('punkteBox').hidden = true; $('urgent').hidden = true;
-    $('risks').innerHTML = ''; $('verlaufBox').hidden = true; $('posBox').hidden = true;
-    renderStatus();
+  // ---------- Aktivität (wer hat wann was gesetzt) ----------
+  // Gespeichert als eigene Eigenschaft an der Mail, damit alle im gemeinsamen Postfach es sehen.
+  // Format je Eintrag: Akteur|Status-Nr (oder x)|Minuten seit 1970|Bearbeiter
+  function parseLog(raw) {
+    return String(raw || '').split(';').filter(Boolean).map(function (p) {
+      var a = p.split('|');
+      var s = a[1] === 'x' ? 'x' : STATUS[parseInt(a[1], 10)];
+      return { p: a[0], s: s, t: parseInt(a[2], 10) * 60000, a: a[3] || '' };
+    }).filter(function (e) { return e.s && !isNaN(e.t); });
   }
 
-  // ---------- Anzeige ----------
-  function render() {
-    var a = state.analysis;
-    if (!a) { showEmpty(); return; }
-    $('subject').textContent = state.subject || '(ohne Betreff)';
-    $('urgent').hidden = !a.urgent;
-    renderRisks();
-    renderStatus();
-    renderChecklist();
-    renderPunkte();
-    renderPositionen();
-    renderVerlauf();
+  function serializeLog(list) {
+    return list.map(function (e) {
+      return [e.p, e.s === 'x' ? 'x' : STATUS.indexOf(e.s), Math.floor(e.t / 60000), e.a || ''].join('|');
+    }).join(';');
   }
 
-  // Einzelne Druckarbeiten der Mail, je mit Menge / Format / Papier / Farbe
-  function renderPositionen() {
-    var pos = state.analysis.positionen || [];
-    var box = $('posBox');
-    box.hidden = pos.length === 0;
-    if (!pos.length) return;
-    var unvollstaendig = pos.filter(function (p) { return p.fehlt.length; }).length;
-    $('posCount').textContent = pos.length + ' Positionen' + (unvollstaendig ? ', ' + unvollstaendig + ' unvollständig' : '');
-    var ul = $('positionen');
-    ul.innerHTML = '';
-    pos.forEach(function (p, i) {
-      var li = document.createElement('li');
-      var h = document.createElement('div');
-      h.className = 'pos-title';
-      h.textContent = (i + 1) + '. ' + p.text;
-      li.appendChild(h);
-      var row = document.createElement('div');
-      row.className = 'pos-row';
-      [['Menge', p.menge], ['Format', p.format], ['Papier', p.papier], ['Farbe', p.farbe]].forEach(function (c) {
-        var s = document.createElement('span');
-        s.className = 'pos-cell ' + (c[1] ? 'ok' : 'fehlt');
-        s.textContent = c[0] + ': ' + (c[1] || 'fehlt');
-        row.appendChild(s);
-      });
-      li.appendChild(row);
-      ul.appendChild(li);
+  function loadLog(done) {
+    state.log = [];
+    state.props = null;
+    if (!state.item || !state.item.loadCustomPropertiesAsync) { done(); return; }
+    state.item.loadCustomPropertiesAsync(function (r) {
+      if (r.status === Office.AsyncResultStatus.Succeeded) {
+        state.props = r.value;
+        state.log = parseLog(r.value.get('ac_log'));
+      }
+      done();
     });
   }
 
-  // Roter Warnblock: fehlende Anhänge, Weiterleitung ohne Anhang
+  function addLog(actor, status, assignee) {
+    state.log.unshift({ p: actor, s: status, t: Date.now(), a: assignee || '' });
+    state.log = state.log.slice(0, 12);
+    if (state.demo) { state.demoLogs[state.itemKey] = state.log; return; }
+    if (state.props) {
+      try {
+        state.props.set('ac_log', serializeLog(state.log));
+        state.props.saveAsync(function () {});
+      } catch (e) { /* Protokoll ist nur eine Zugabe */ }
+    }
+  }
+
+  function fmtZeit(t) {
+    var d = new Date(t), n = new Date();
+    var p2 = function (x) { return ('0' + x).slice(-2); };
+    var hm = p2(d.getHours()) + ':' + p2(d.getMinutes());
+    var tag0 = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
+    if (t >= tag0) return 'heute ' + hm;
+    if (t >= tag0 - 86400000) return 'gestern ' + hm;
+    return p2(d.getDate()) + '.' + p2(d.getMonth() + 1) + '. ' + hm;
+  }
+
+  // ---------- Anzeige: Diese Mail ----------
+  function showEmpty() {
+    state.item = null; state.analysis = null;
+    $('subject').textContent = 'Keine Mail geöffnet';
+    ['kWas', 'kWann', 'kAnhang', 'ownerLine', 'risks', 'log', 'verlauf', 'checklist'].forEach(function (id) { $(id).innerHTML = ''; });
+    ['eilig', 'logCard', 'verlaufBox', 'replyCard', 'posBox', 'punkteBox'].forEach(function (id) { $(id).hidden = true; });
+    $('kernCard').style.borderColor = '';
+    renderStatus();
+  }
+
+  function render() {
+    if (!state.analysis) { showEmpty(); return; }
+    renderKern();
+    renderRisks();
+    renderStatus();
+    renderLog();
+    renderVerlauf();
+    renderReply();
+    renderDetails();
+  }
+
+  function renderKern() {
+    var a = state.analysis, k = a.kern;
+    $('subject').textContent = state.subject || '(ohne Betreff)';
+    $('eilig').hidden = !k.bisWann.eilig;
+
+    // Bearbeiter-Zeile und Rahmen in der Farbe der Person
+    var cur = currentStatus();
+    var line = $('ownerLine');
+    line.innerHTML = '';
+    var col = '';
+    if (cur) {
+      var pe = person(cur.person);
+      col = pe.farbe;
+      var n = el('span', null, pe.kuerzel);
+      n.style.color = pe.farbe;
+      line.appendChild(n);
+      line.appendChild(document.createTextNode(' · '));
+      var s = el('span', null, cur.status);
+      s.style.color = STATUS_FARBE[cur.status];
+      line.appendChild(s);
+    } else {
+      line.appendChild(el('span', 'muted', 'Noch kein Bearbeiter'));
+    }
+    $('kernCard').style.borderColor = col;
+
+    // Was
+    var w = $('kWas');
+    w.innerHTML = '';
+    if (k.was.text) w.appendChild(document.createTextNode(k.was.text));
+    k.was.fehlt.forEach(function (f, i) {
+      var txt = /unvollständig/.test(f) ? f : f + ' fehlt';
+      w.appendChild(el('span', 'bad', (k.was.text || i ? ' · ' : '') + txt));
+    });
+    if (!k.was.text && !k.was.fehlt.length) w.appendChild(el('span', 'bad', 'nicht erkennbar'));
+
+    // Bis wann
+    var wn = $('kWann');
+    wn.innerHTML = '';
+    if (k.bisWann.state === 'ok') {
+      wn.appendChild(document.createTextNode(k.bisWann.text));
+      if (!k.bisWann.uhrzeit) wn.appendChild(el('span', 'sub', 'Uhrzeit nicht genannt'));
+    } else if (k.bisWann.state === 'unklar') {
+      wn.appendChild(el('span', 'warn', k.bisWann.text || 'unklar'));
+      wn.appendChild(el('span', 'sub', 'kein genaues Datum'));
+    } else {
+      wn.appendChild(el('span', 'bad', 'fehlt'));
+    }
+
+    // Anhang
+    var an = k.anhang, ak = $('kAnhang');
+    ak.innerHTML = '';
+    if (an.state === 'ja') {
+      ak.appendChild(el('span', 'ok', 'Ja'));
+      if (an.namen.length) ak.appendChild(el('span', 'sub', an.namen.join(', ')));
+    } else if (an.state === 'geliefert') {
+      ak.appendChild(el('span', 'ok', 'Ja'));
+      ak.appendChild(el('span', 'sub', 'Daten bereits geliefert'));
+    } else if (an.state === 'folgt') {
+      ak.appendChild(el('span', 'warn', 'Folgt noch'));
+    } else if (an.state === 'teilweise') {
+      ak.appendChild(el('span', 'bad', 'Teilweise'));
+      ak.appendChild(el('span', 'sub', 'Es fehlen: ' + an.fehlend.join(', ')));
+    } else {
+      ak.appendChild(el('span', 'bad', 'Nein'));
+      if (an.erwaehnt) ak.appendChild(el('span', 'sub', 'In der Mail erwähnt, aber nicht angehängt'));
+    }
+  }
+
   function renderRisks() {
     var box = $('risks');
     box.innerHTML = '';
     (state.analysis.risiken || []).forEach(function (r) {
-      var d = document.createElement('div');
-      d.className = 'risk' + (r.typ !== 'anhang_fehlt' ? ' mild' : '');
-      var t = document.createElement('div');
-      t.className = 'risk-title';
-      t.textContent = (r.typ !== 'anhang_fehlt' ? '⚠ ' : '⛔ ') + r.titel;
-      d.appendChild(t);
+      var d = el('div', 'risk' + (r.typ !== 'anhang_fehlt' ? ' mild' : ''));
+      d.appendChild(el('div', 'risk-title', (r.typ !== 'anhang_fehlt' ? '⚠ ' : '⛔ ') + r.titel));
       if (r.details && r.details.length) {
-        var ul = document.createElement('ul');
-        r.details.forEach(function (n) {
-          var li = document.createElement('li'); li.textContent = n; ul.appendChild(li);
-        });
+        var ul = el('ul');
+        r.details.forEach(function (n) { ul.appendChild(el('li', null, n)); });
         d.appendChild(ul);
       }
       box.appendChild(d);
     });
   }
 
-  // Zusammenfassung des Mailverlaufs
+  function renderStatus() {
+    var peopleBox = $('people');
+    peopleBox.innerHTML = '';
+    state.team.forEach(function (k) {
+      var pe = person(k);
+      var b = el('button', 'chip' + (k === state.person ? ' on' : ''), k);
+      b.type = 'button';
+      b.title = pe.name;
+      if (k === state.person) { b.style.borderColor = pe.farbe; b.style.color = pe.farbe; }
+      b.onclick = function () { state.person = k; renderStatus(); };
+      peopleBox.appendChild(b);
+    });
+
+    var cur = currentStatus();
+    var suggest = state.analysis && state.analysis.vorschlag;
+    var box = $('statuses');
+    box.innerHTML = '';
+    STATUS.forEach(function (s) {
+      var b = el('button', 'status' + (cur && cur.status === s ? ' on' : '') + (!cur && suggest === s ? ' suggest' : ''), s);
+      b.type = 'button';
+      b.style.color = STATUS_FARBE[s];
+      if (cur && cur.status === s) b.style.borderColor = STATUS_FARBE[s];
+      b.title = (!cur && suggest === s) ? 'Vorschlag nach Mailtext' : '';
+      b.onclick = function () { setStatus(s); };
+      box.appendChild(b);
+    });
+    $('noStatus').hidden = !cur;
+  }
+
+  function renderLog() {
+    var card = $('logCard'), ul = $('log');
+    ul.innerHTML = '';
+    if (!state.log.length) { card.hidden = true; return; }
+    card.hidden = false;
+    state.log.slice(0, 6).forEach(function (e) {
+      var li = el('li');
+      var n = el('b', null, e.p);
+      n.style.color = person(e.p).farbe;
+      li.appendChild(n);
+      if (e.s === 'x') {
+        li.appendChild(document.createTextNode(' hat den Status entfernt'));
+      } else {
+        li.appendChild(document.createTextNode(' hat auf '));
+        var s = el('b', null, e.s);
+        s.style.color = STATUS_FARBE[e.s];
+        li.appendChild(s);
+        li.appendChild(document.createTextNode(' gesetzt' + (e.a && e.a !== e.p ? ' (Bearbeiter ' + e.a + ')' : '')));
+      }
+      li.appendChild(el('span', 'zeit', fmtZeit(e.t)));
+      ul.appendChild(li);
+    });
+
+    // Erinnerung: GZD wartet seit 48 Stunden
+    var hint = $('gzdHint');
+    var cur = currentStatus();
+    var last = state.log.filter(function (e) { return e.s === 'GZD warten'; })[0];
+    var std = last ? Math.floor((Date.now() - last.t) / 3600000) : 0;
+    if (cur && cur.status === 'GZD warten' && last && std >= 48) {
+      hint.hidden = false;
+      hint.textContent = '⏰ GZD wartet seit ' + std + ' Std. Antwort vom Kunden prüfen.';
+    } else {
+      hint.hidden = true;
+    }
+  }
+
+  // Mailverlauf: nur Nachrichten mit Auftragsinfo, Small Talk wird ausgeblendet
   function renderVerlauf() {
-    var th = state.analysis.thread;
-    var box = $('verlaufBox');
-    var msgs = th && th.messages ? th.messages.filter(function (m) { return m.punkte.length || m.von; }) : [];
+    var th = state.analysis.thread, box = $('verlaufBox');
+    var msgs = th.messages;
     if (msgs.length < 2) { box.hidden = true; return; }
     box.hidden = false;
-    $('verlaufCount').textContent = msgs.length + ' Nachrichten';
+    var rel = msgs.map(function (m, i) { return m.score > 0 || i === th.wichtigste; });
+    var versteckt = rel.filter(function (r) { return !r; }).length;
+    $('verlaufInfo').textContent = msgs.length + ' Nachrichten' + (versteckt ? ', ' + versteckt + ' ohne Auftragsinfo ausgeblendet' : '');
     var ol = $('verlauf');
     ol.innerHTML = '';
     msgs.forEach(function (m, i) {
-      var li = document.createElement('li');
-      var h = document.createElement('div');
-      h.className = 'vhead';
-      h.textContent = (i === 0 ? 'Aktuell' : 'Davor') + (m.von ? ' · ' + m.von : '') + (m.datum ? ' · ' + m.datum : '');
+      if (!rel[i]) return;
+      var li = el('li');
+      var h = el('div', 'vhead', (m.von || 'Absender unbekannt') + (m.datum ? ' · ' + m.datum : ''));
+      if (i === th.wichtigste) h.appendChild(el('span', 'star', '★ wichtigste Info'));
       li.appendChild(h);
       if (m.punkte.length) {
-        var ul = document.createElement('ul');
-        m.punkte.forEach(function (p) {
-          var l2 = document.createElement('li'); l2.textContent = p; ul.appendChild(l2);
-        });
+        var ul = el('ul');
+        m.punkte.slice(0, 2).forEach(function (p) { ul.appendChild(el('li', null, p)); });
         li.appendChild(ul);
       }
       ol.appendChild(li);
     });
   }
 
-  function renderStatus() {
-    var peopleBox = $('people');
-    peopleBox.innerHTML = '';
-    state.team.forEach(function (p) {
-      var pe = person(p);
-      var b = document.createElement('button');
-      b.className = 'chip' + (p === state.person ? ' on' : '');
-      b.textContent = p;
-      b.title = pe.name;
-      b.style.borderColor = pe.farbe;
-      if (p === state.person) { b.style.background = pe.farbe; b.style.color = '#fff'; }
-      b.onclick = function () { state.person = p; renderStatus(); };
-      peopleBox.appendChild(b);
-    });
-
-    var cur = currentStatus();
-    // Farbband: wem gehört diese Mail?
-    var band = $('ownerBand');
-    if (cur) {
-      var owner = person(cur.person);
-      band.hidden = false;
-      band.style.background = owner.farbe;
-      band.textContent = (state.me && cur.person !== state.me ? 'Gehört ' : 'Bearbeiter: ') + owner.name;
-    } else {
-      band.hidden = true;
-    }
-    var suggest = state.analysis && state.analysis.vorschlag;
-    var box = $('statuses');
-    box.innerHTML = '';
-    STATUS.forEach(function (s) {
-      var b = document.createElement('button');
-      b.className = 'status' + (cur && cur.status === s ? ' on' : '') + (!cur && suggest === s ? ' suggest' : '');
-      b.setAttribute('data-s', s);
-      b.textContent = s;
-      b.title = (!cur && suggest === s) ? 'Vorschlag nach Mailtext' : '';
-      b.onclick = function () { setStatus(s); };
-      box.appendChild(b);
-    });
-    $('current').textContent = cur ? ('Aktuell: ' + cur.person + ' · ' + cur.status) : 'Noch kein Status gesetzt.';
-    if (!state.item) {
-      $('current').textContent = 'Öffne eine Mail, um den Status zu setzen.';
-    }
-  }
-
-  function note(msg, kind) {
-    var n = $('note');
-    n.textContent = msg;
-    n.className = 'note' + (kind ? ' ' + kind : '');
-    n.hidden = !msg;
-  }
-
   function activeMissing() {
-    var na = state.na[state.itemKey] || {};
-    return state.analysis.missing.filter(function (r) { return !na[r.key]; });
+    return state.analysis.missing.filter(function (r) {
+      return state.detailsInReply || CORE.indexOf(r.key) !== -1;
+    });
   }
 
-  function renderChecklist() {
+  function renderReply() {
     var a = state.analysis;
-    var na = state.na[state.itemKey] || {};
+    var miss = activeMissing();
+    $('replyCard').hidden = a.missing.length === 0;
+    var b = $('replyBtn');
+    b.disabled = miss.length === 0;
+    b.textContent = miss.length
+      ? 'Rückfrage zu ' + miss.length + ' fehlenden Angabe' + (miss.length === 1 ? '' : 'n') + ' schreiben'
+      : 'Kernangaben vollständig';
+  }
+
+  function renderDetails() {
+    var a = state.analysis;
     var ul = $('checklist');
     ul.innerHTML = '';
     var ok = 0, total = 0;
-
     a.order.forEach(function (key) {
       var f = a.fields[key];
-      var isNa = !!na[key];
-      var li = document.createElement('li');
-      var cls = f.state + (f.required ? '' : ' optional') + (isNa ? ' na' : '');
-      li.className = cls;
-
-      var icon = document.createElement('div');
-      icon.className = 'icon';
-      icon.textContent = f.state === 'ok' ? '✓' : (f.state === 'fehlt' ? '✗' : (f.state === 'folgt' ? '⏳' : '!'));
-
-      var main = document.createElement('div');
-      var lab = document.createElement('div');
-      lab.className = 'flabel';
-      lab.textContent = f.label + (f.required ? '' : ' (Zusatz)');
-      main.appendChild(lab);
-
-      var vals = document.createElement('div');
-      vals.className = 'fvals';
+      var li = el('li', f.state + (f.required ? '' : ' optional'));
+      var icon = f.state === 'ok' ? '✓' : (f.state === 'fehlt' ? '✗' : (f.state === 'folgt' ? '⏳' : '!'));
+      li.appendChild(el('div', 'icon', icon));
+      var main = el('div');
+      main.appendChild(el('div', 'flabel', f.label + (f.required ? '' : ' (Zusatz)')));
+      var vals = el('div', 'fvals');
       f.values.slice(0, 5).forEach(function (v) {
-        var s = document.createElement('span');
-        s.textContent = v.text;
+        var s = el('span', null, v.text);
         s.title = v.context || '';
         vals.appendChild(s);
       });
-      if (f.values.length > 5) {
-        var more = document.createElement('span');
-        more.textContent = '+' + (f.values.length - 5);
-        vals.appendChild(more);
-      }
       main.appendChild(vals);
-
       var hint = hintFor(f);
-      if (hint) {
-        var h = document.createElement('div');
-        h.className = 'fhint';
-        h.textContent = hint;
-        main.appendChild(h);
-      }
-
-      var side = document.createElement('div');
-      if (f.required && f.state !== 'ok') {
-        var skip = document.createElement('button');
-        skip.className = 'skip';
-        skip.textContent = isNa ? 'doch nötig' : 'nicht nötig';
-        skip.onclick = function () {
-          state.na[state.itemKey] = state.na[state.itemKey] || {};
-          state.na[state.itemKey][key] = !isNa;
-          renderChecklist();
-        };
-        side.appendChild(skip);
-      }
-
-      li.appendChild(icon); li.appendChild(main); li.appendChild(side);
+      if (hint) main.appendChild(el('div', 'fhint', hint));
+      li.appendChild(main);
       ul.appendChild(li);
-
-      if (f.required && !isNa) { total++; if (f.state === 'ok') ok++; }
+      if (f.required) { total++; if (f.state === 'ok') ok++; }
     });
-
     $('counter').textContent = ok + ' von ' + total + ' vollständig';
-    var miss = activeMissing();
-    $('replyBtn').hidden = miss.length === 0;
-    $('replyHint').hidden = miss.length === 0;
-    $('replyBtn').textContent = 'Rückfrage zu ' + miss.length + ' fehlenden Angabe' + (miss.length === 1 ? '' : 'n') + ' schreiben';
+
+    // Positionen
+    var pos = a.positionen || [];
+    $('posBox').hidden = pos.length === 0;
+    if (pos.length) {
+      var unv = pos.filter(function (p) { return p.fehlt.length; }).length;
+      $('posCount').textContent = pos.length + ' Positionen' + (unv ? ', ' + unv + ' unvollständig' : '');
+      var pl = $('positionen');
+      pl.innerHTML = '';
+      pos.forEach(function (p, i) {
+        var li = el('li');
+        li.appendChild(el('div', 'pos-title', (i + 1) + '. ' + p.text));
+        var row = el('div');
+        [['Menge', p.menge], ['Format', p.format], ['Papier', p.papier], ['Farbe', p.farbe]].forEach(function (c) {
+          row.appendChild(el('span', 'pos-cell ' + (c[1] ? 'ok' : 'fehlt'), c[0] + ': ' + (c[1] || 'fehlt')));
+        });
+        li.appendChild(row);
+        pl.appendChild(li);
+      });
+    }
+
+    // Wichtige Stellen
+    $('punkteBox').hidden = a.punkte.length === 0;
+    var pu = $('punkte');
+    pu.innerHTML = '';
+    a.punkte.forEach(function (p) { pu.appendChild(el('li', null, p)); });
   }
 
   function hintFor(f) {
@@ -362,42 +509,36 @@
       if (f.key === 'daten') return 'Anhang erwähnt, aber keine Datei erkannt';
       return 'Nur ungenau erwähnt, bitte prüfen';
     }
-    if (f.key === 'termin' && !f.hasUhrzeit) return 'Uhrzeit nicht genannt';
     return '';
   }
 
-  function renderPunkte() {
-    var a = state.analysis;
-    var ul = $('punkte');
-    ul.innerHTML = '';
-    a.punkte.forEach(function (p) {
-      var li = document.createElement('li');
-      li.textContent = p;
-      ul.appendChild(li);
-    });
-    $('punkteBox').hidden = a.punkte.length === 0;
+  function note(msg, kind) {
+    var n = $('note');
+    n.textContent = msg;
+    n.className = 'note' + (kind ? ' ' + kind : '');
+    n.hidden = !msg;
   }
 
   // ---------- Status setzen ----------
-  // Die Kategorie-Farbe in Outlook gehört zur Person (nicht zum Status)
-  function presetColor(personKuerzel) {
-    try {
-      return Office.MailboxEnums.CategoryColor['Preset' + person(personKuerzel).preset];
-    } catch (e) { return undefined; }
+  function presetColor(k) {
+    try { return Office.MailboxEnums.CategoryColor['Preset' + person(k).preset]; } catch (e) { return undefined; }
   }
 
   function setStatus(status) {
     if (!state.item) return;
-    var person = state.person || state.me || state.team[0];
-    var cat = person + SEP + status;
+    var p = state.person || state.me || state.team[0];
+    var actor = state.me || p;
+    var cat = p + SEP + status;
 
     if (state.demo) {
       state.categories = state.categories.filter(function (c) { return !STATUS_RE.test(c); }).concat([cat]);
+      state.demoCats[state.itemKey] = state.categories;
+      addLog(actor, status, p);
       afterSet(status);
       return;
     }
 
-    ensureMaster(cat, person, function () {
+    ensureMaster(cat, p, function () {
       var old = state.categories.filter(function (c) { return STATUS_RE.test(c) && c !== cat; });
       var add = function () {
         state.item.categories.addAsync([cat], function (r) {
@@ -405,14 +546,30 @@
             note('Konnte Kategorie nicht setzen: ' + (r.error && r.error.message), 'err');
             return;
           }
+          addLog(actor, status, p);
           readCategories(function () { afterSet(status); });
         });
       };
-      if (old.length) {
-        state.item.categories.removeAsync(old, function () { add(); });
-      } else {
-        add();
-      }
+      if (old.length) state.item.categories.removeAsync(old, function () { add(); });
+      else add();
+    });
+  }
+
+  function removeStatus() {
+    if (!state.item) return;
+    var old = state.categories.filter(function (c) { return STATUS_RE.test(c); });
+    if (!old.length) return;
+    var actor = state.me || state.person;
+    if (state.demo) {
+      state.categories = state.categories.filter(function (c) { return !STATUS_RE.test(c); });
+      state.demoCats[state.itemKey] = state.categories;
+      addLog(actor, 'x', '');
+      afterSet('x');
+      return;
+    }
+    state.item.categories.removeAsync(old, function () {
+      addLog(actor, 'x', '');
+      readCategories(function () { afterSet('x'); });
     });
   }
 
@@ -431,32 +588,242 @@
   }
 
   function afterSet(status) {
+    syncPersonFromCategories();
+    renderKern();
     renderStatus();
-    if (status === 'Erledigt') {
-      note('Als erledigt markiert. Der Ablage-Flow schiebt die Mail beim nächsten Durchlauf in den Ordner "Erledigt".', 'good');
-    } else {
-      note('Status gesetzt: ' + state.person + ' · ' + status, 'good');
-      setTimeout(function () { note(''); }, 3500);
-    }
+    renderLog();
+    if (status === 'x') note('Status entfernt.', 'good');
+    else if (status === 'Erledigt') note('Als erledigt markiert. Der Ablage-Flow verschiebt die Mail später in den Ordner "Erledigt".', 'good');
+    else note('Status gesetzt: ' + state.person + ' · ' + status, 'good');
+    setTimeout(function () { note(''); }, 4000);
   }
 
   // ---------- Rückfrage ----------
-  function writeReply() {
+  function replyData() {
     var a = state.analysis;
-    if (!a) return;
-    var miss = activeMissing();
-    var copy = { fields: a.fields, missing: miss, thread: a.thread };
-    if (state.demo) {
-      alert(Auftrag.rueckfrage(copy));
-      return;
+    return { fields: a.fields, missing: activeMissing(), thread: a.thread };
+  }
+
+  function writeReply() {
+    if (!state.analysis) return;
+    var data = replyData();
+    if (!data.missing.length) return;
+    if (state.demo) { alert(Auftrag.rueckfrage(data)); return; }
+    var item = state.item;
+    var an = (item.from && item.from.emailAddress) || '';
+    var betreff = item.subject || '';
+    if (!/^\s*(AW|RE)\s*:/i.test(betreff)) betreff = 'AW: ' + betreff.replace(/^\s*(WG|FW|Fwd)\s*:\s*/i, '');
+    var form = { subject: betreff, htmlBody: Auftrag.rueckfrageHtml(data) };
+    if (an) form.toRecipients = [an];
+    try {
+      Office.context.mailbox.displayNewMessageForm(form);
+    } catch (e) {
+      kopieren();
     }
-    state.item.displayReplyForm(Auftrag.rueckfrageHtml(copy));
+  }
+
+  function kopieren() {
+    if (!state.analysis) return;
+    var txt = Auftrag.rueckfrage(replyData());
+    var ta = document.createElement('textarea');
+    ta.value = txt;
+    ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { }
+    document.body.removeChild(ta);
+    if (ok) {
+      note('Rückfragetext kopiert. In eine Antwort einfügen mit Strg+V.', 'good');
+    } else {
+      $('copyBox').hidden = false;
+      $('copyText').value = txt;
+      $('copyText').select();
+      note('Automatisches Kopieren geht hier nicht. Text unten markieren und mit Strg+C kopieren.', 'err');
+    }
+  }
+
+  // ---------- Übersicht ----------
+  // Datenquelle: im Demo-Modus die Testmails. In Outlook braucht die Mail-Liste Microsoft Graph
+  // (noch nicht eingerichtet), dort erscheint ein Hinweis.
+  function buildDemoOverview() {
+    var tm = window.TESTMAILS || [];
+    var fake = [null, { p: 'THe', s: 'In Bearbeitung' }, { p: 'SRu', s: 'Daten folgen' }, null,
+      { p: 'FSt', s: 'GZD warten' }, { p: 'JRe', s: 'Warten' }, { p: 'THe', s: 'Erledigt' }, { p: 'SRu', s: 'In Bearbeitung' }];
+    state.overview.items = tm.map(function (m, i) {
+      var an = Auftrag.analyse(m);
+      return {
+        idx: i,
+        subject: m.subject || '(ohne Betreff)',
+        from: m.from || '',
+        time: Date.now() - i * 5400000,
+        kern: an.kern,
+        urgent: an.kern.bisWann.eilig,
+        risiko: an.risiken.some(function (r) { return r.typ === 'anhang_fehlt'; }),
+        status: fake[i % fake.length]
+      };
+    });
+  }
+
+  function countBy(items, fn) {
+    var c = {};
+    items.forEach(function (it) { var k = fn(it); c[k] = (c[k] || 0) + 1; });
+    return c;
+  }
+
+  function chipRow(box, entries, current, onPick, colorFn) {
+    box.innerHTML = '';
+    entries.forEach(function (e) {
+      var b = el('button', 'chip' + (current === e.key ? ' on' : ''), e.label);
+      b.type = 'button';
+      var col = colorFn ? colorFn(e.key) : '';
+      if (current === e.key && col) { b.style.borderColor = col; b.style.color = col; }
+      else if (col) { b.style.color = col; }
+      b.onclick = function () { onPick(e.key); };
+      box.appendChild(b);
+    });
+  }
+
+  function renderOverview() {
+    var o = state.overview;
+    var all = o.items;
+    var cMa = countBy(all, function (it) { return it.status ? it.status.p : 'ohne'; });
+    var cSt = countBy(all, function (it) { return it.status ? it.status.s : 'ohne'; });
+
+    var maEntries = [{ key: 'alle', label: 'Alle ' + all.length }]
+      .concat(state.team.map(function (k) { return { key: k, label: k + ' ' + (cMa[k] || 0) }; }))
+      .concat([{ key: 'ohne', label: 'Ohne ' + (cMa.ohne || 0) }]);
+    chipRow($('overMa'), maEntries, o.ma, function (k) { o.ma = k; renderOverview(); },
+      function (k) { return (k === 'alle' || k === 'ohne') ? '' : person(k).farbe; });
+
+    var stEntries = [{ key: 'alle', label: 'Alle' }]
+      .concat(STATUS.map(function (s) { return { key: s, label: s + ' ' + (cSt[s] || 0) }; }))
+      .concat([{ key: 'ohne', label: 'Ohne ' + (cSt.ohne || 0) }]);
+    chipRow($('overSt'), stEntries, o.st, function (k) { o.st = k; renderOverview(); },
+      function (k) { return STATUS_FARBE[k] || ''; });
+
+    $('sortWichtig').className = 'chip' + (o.sort === 'wichtig' ? ' on' : '');
+    $('sortNeu').className = 'chip' + (o.sort === 'neu' ? ' on' : '');
+
+    var q = o.q.trim().toLowerCase();
+    var list = all.filter(function (it) {
+      if (o.ma === 'ohne' && it.status) return false;
+      if (o.ma !== 'alle' && o.ma !== 'ohne' && !(it.status && it.status.p === o.ma)) return false;
+      if (o.st === 'ohne' && it.status) return false;
+      if (o.st !== 'alle' && o.st !== 'ohne' && !(it.status && it.status.s === o.st)) return false;
+      if (q) {
+        var hay = (it.subject + ' ' + it.from + ' ' + it.kern.was.text + ' ' + it.kern.bisWann.text).toLowerCase();
+        if (hay.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+
+    var score = function (it) {
+      if (it.status && it.status.s === 'Erledigt') return -1;
+      return (it.urgent ? 4 : 0) + (it.risiko ? 3 : 0) + (it.kern.bisWann.state === 'fehlt' ? 1 : 0);
+    };
+    list.sort(function (a, b) {
+      if (o.sort === 'wichtig') { var d = score(b) - score(a); if (d) return d; }
+      return b.time - a.time;
+    });
+
+    $('overCount').textContent = list.length + ' von ' + all.length + ' Mails';
+    var ul = $('overList');
+    ul.innerHTML = '';
+    list.forEach(function (it) {
+      var li = el('li', 'orow');
+      li.style.borderLeftColor = it.status ? person(it.status.p).farbe : '';
+      var r1 = el('div', 'r1');
+      r1.appendChild(el('span', 'subj', it.subject));
+      r1.appendChild(el('span', 'when', fmtZeit(it.time)));
+      li.appendChild(r1);
+
+      var was = it.kern.was.text || 'nicht erkennbar';
+      var r2 = el('div', 'r2', was);
+      it.kern.was.fehlt.forEach(function (f) { r2.appendChild(el('span', 'bad', ' · ' + (/unvollständig/.test(f) ? f : f + ' fehlt'))); });
+      li.appendChild(r2);
+
+      var r3 = el('div', 'r3');
+      if (it.urgent) r3.appendChild(el('span', 'eil', 'Eilig'));
+      var w = it.kern.bisWann;
+      r3.appendChild(el('span', w.state === 'fehlt' ? 'bad' : (w.state === 'unklar' ? 'okk' : 'okk'),
+        'Bis: ' + (w.state === 'fehlt' ? 'fehlt' : w.text)));
+      var an = it.kern.anhang.state;
+      var anOk = an === 'ja' || an === 'geliefert';
+      r3.appendChild(el('span', anOk ? 'okk' : 'bad',
+        'Anhang: ' + (anOk ? 'ja' : (an === 'folgt' ? 'folgt' : (an === 'teilweise' ? 'teilweise' : 'nein')))));
+      if (it.status) {
+        var st = el('span', null, it.status.p + ' · ' + it.status.s);
+        st.style.color = STATUS_FARBE[it.status.s];
+        st.style.fontWeight = '600';
+        r3.appendChild(st);
+      }
+      li.appendChild(r3);
+
+      li.onclick = function () { openFromOverview(it); };
+      ul.appendChild(li);
+    });
+  }
+
+  function openFromOverview(it) {
+    if (state.demo) {
+      runDemo(window.TESTMAILS[it.idx]);
+      showTab('mail');
+    } else if (it.id && Office.context.mailbox.displayMessageForm) {
+      Office.context.mailbox.displayMessageForm(it.id);
+    }
+  }
+
+  function showTab(which) {
+    var mail = which === 'mail';
+    $('viewMail').hidden = !mail;
+    $('viewOver').hidden = mail;
+    $('tabMail').className = 'tab' + (mail ? ' on' : '');
+    $('tabOver').className = 'tab' + (mail ? '' : ' on');
+    if (!mail) renderOverview();
+  }
+
+  function setupOverview() {
+    var notice = $('overNotice');
+    if (state.demo) {
+      buildDemoOverview();
+      notice.hidden = false;
+      notice.textContent = 'Vorschau mit Testdaten. In Outlook zeigt dieser Reiter später alle Mails des Postfachs.';
+      $('overBar').hidden = false;
+    } else {
+      notice.hidden = false;
+      notice.textContent = 'Die Übersicht über alle Mails braucht eine Verbindung zu Microsoft 365 (Graph) und ist noch nicht eingerichtet. Bis dahin: Kategorien in der linken Leiste anklicken, z. B. "SRu · Warten".';
+      $('overBar').hidden = true;
+      $('overList').innerHTML = '';
+    }
   }
 
   // ---------- Start ----------
+  window.AuftragUI = { htmlZuText: htmlZuText, parseLog: parseLog, serializeLog: serializeLog }; // für Tests
+
   function bind() {
     $('saveSettings').onclick = saveSettings;
     $('replyBtn').onclick = writeReply;
+    $('copyBtn').onclick = kopieren;
+    $('noStatus').onclick = removeStatus;
+    $('tabMail').onclick = function () { showTab('mail'); };
+    $('tabOver').onclick = function () { showTab('over'); };
+    $('detailsInReply').onchange = function () { state.detailsInReply = this.checked; if (state.analysis) renderReply(); };
+    $('overSearch').oninput = function () { state.overview.q = this.value; renderOverview(); };
+    $('sortWichtig').onclick = function () { state.overview.sort = 'wichtig'; renderOverview(); };
+    $('sortNeu').onclick = function () { state.overview.sort = 'neu'; renderOverview(); };
+  }
+
+  function runDemo(mail) {
+    state.item = { demo: true };
+    state.itemKey = 'demo:' + (mail.subject || '') + ':' + (mail.text || '').length;
+    state.subject = mail.subject || '';
+    state.categories = state.demoCats[state.itemKey] || [];
+    state.log = state.demoLogs[state.itemKey] || [];
+    state.analysis = Auftrag.analyse(mail);
+    syncPersonFromCategories();
+    note('');
+    render();
   }
 
   function startDemo() {
@@ -465,27 +832,18 @@
     loadSettings();
     var sel = $('demoSelect');
     (window.TESTMAILS || []).forEach(function (t, i) {
-      var o = document.createElement('option');
-      o.value = i; o.textContent = t.name;
+      var o = el('option', null, t.name);
+      o.value = i;
       sel.appendChild(o);
     });
-    function run(mail) {
-      state.item = { demo: true };
-      state.itemKey = 'demo:' + (mail.subject || '') + ':' + (mail.text || '').length;
-      state.subject = mail.subject || '';
-      state.categories = [];
-      state.analysis = Auftrag.analyse(mail);
-      syncPersonFromCategories();
-      note('');
-      render();
-    }
-    sel.onchange = function () { run(window.TESTMAILS[sel.value]); };
+    sel.onchange = function () { runDemo(window.TESTMAILS[sel.value]); };
     $('demoGo').onclick = function () {
       var t = $('demoText').value.trim();
-      if (t) run({ subject: 'Eigene Testmail', text: t, attachments: [] });
-      else run(window.TESTMAILS[sel.value]);
+      if (t) runDemo({ subject: 'Eigene Testmail', text: t, attachments: [] });
+      else runDemo(window.TESTMAILS[sel.value]);
     };
-    if (window.TESTMAILS && window.TESTMAILS.length) run(window.TESTMAILS[0]);
+    setupOverview();
+    if (window.TESTMAILS && window.TESTMAILS.length) runDemo(window.TESTMAILS[0]);
   }
 
   function start() {
@@ -493,6 +851,7 @@
     var haveMailbox = typeof Office !== 'undefined' && Office.context && Office.context.mailbox && Office.context.mailbox.item !== undefined;
     if (haveMailbox) {
       loadSettings();
+      setupOverview();
       try {
         Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, function () { note(''); loadItem(); });
       } catch (e) { /* ältere Clients */ }
@@ -506,7 +865,6 @@
     var started = false;
     var go = function () { if (!started) { started = true; start(); } };
     Office.onReady(go);
-    // Falls office.js zwar geladen ist, aber nicht in Outlook läuft
     setTimeout(go, 2500);
   } else {
     window.addEventListener('load', start);

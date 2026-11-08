@@ -127,7 +127,7 @@
         /(?<![\d.])(?:0?[1-9]|[12]\d|3[01])\.\s?(?:0?[1-9]|1[0-2])\.(?:\s?(?:20)?\d{2})?(?![\d])/g,
         wb('(?:bis|spätestens|am|zum|für|vor)\\s+(?:zum\\s+|kommenden\\s+|nächsten\\s+|diesen\\s+)?(?:Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag)', 'gi'),
         wb('Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag', 'g'),
-        wb('heute|morgen|übermorgen|nächste Woche|diese Woche|Ende der Woche|Ende des Monats|Wochenende', 'g'),
+        wb('heute|morgen|übermorgen|nächste Woche|diese Woche|Ende der Woche|Ende des Monats|(?:bis|vor|am|zum|übers)\\s+Wochenende', 'g'),
         wb('KW\\s?\\d{1,2}|Kalenderwoche\\s?\\d{1,2}', 'gi'),
         wb('(?:bis\\s+)?\\d{1,2}(?:[:.]\\d{2})?\\s?Uhr', 'gi'),
         wb('Liefertermin|Abgabetermin|Abholtermin|Deadline|Fertigstellung|ASAP|asap|sofort|dringend|eilig|Express|schnellstmöglich|so schnell wie möglich', 'gi')
@@ -347,7 +347,7 @@
     if (result.daten.folgt) vorschlag = 'Daten folgen';
     else if (/(warte|Rückmeldung|Freigabe|Korrektur)/i.test(full) && missing.length) vorschlag = 'Warten';
 
-    return {
+    var out = {
       fields: result,
       order: FIELDS.map(function (f) { return f.key; }),
       missing: missing,
@@ -358,6 +358,69 @@
       thread: thread,
       positionen: analysePositionen(full)
     };
+    out.kern = baueKern(out, full);
+    return out;
+  }
+
+  // ---------- Kernaussage: Was / Bis wann / Anhang ----------
+  function baueKern(a, full) {
+    var f = a.fields;
+    var first = function (r) { return r.values.length ? r.values[0].text : ''; };
+
+    // WAS
+    var was = { text: '', fehlt: [] };
+    if (a.positionen.length >= 2) {
+      var unvoll = a.positionen.filter(function (p) { return p.fehlt.length; }).length;
+      was.text = a.positionen.length + ' Positionen: ' +
+        a.positionen.slice(0, 3).map(function (p) { return p.text.split(/[,(]/)[0].trim(); }).join(', ') +
+        (a.positionen.length > 3 ? ' …' : '');
+      if (unvoll) was.fehlt.push(unvoll + ' unvollständig');
+    } else {
+      var teile = [];
+      var menge = f.menge.state === 'ok'
+        ? first(f.menge).replace(/^(?:Menge|Auflage|Anzahl|Stückzahl|Stueckzahl)\s*[:=]?\s*/i, '') : '';
+      var art = collect(full, [DRUCKART]);
+      art = art.length ? art[0].text : '';
+      if (menge) teile.push(menge);
+      if (art && !(menge && menge.toLowerCase().indexOf(art.toLowerCase()) !== -1)) teile.push(art);
+      var fmt = f.format.state === 'ok' ? first(f.format) : '';
+      if (fmt) teile.push(fmt);
+      was.text = teile.join(' · ');
+      if (!menge && f.menge.required) was.fehlt.push('Menge');
+      if (!fmt && f.format.required) was.fehlt.push('Format');
+      if (!was.text) was.text = (a.punkte[0] || '').slice(0, 110);
+    }
+
+    // BIS WANN
+    var t = f.termin;
+    var teilT = t.values.filter(function (v) {
+      return /\d{1,2}\.\s?\d{1,2}\.|^KW|Kalenderwoche|^(bis|spätestens|am|zum|für|vor)\s|^(heute|morgen|übermorgen|nächste Woche|diese Woche|Ende der Woche|Ende des Monats)$|Uhr/i.test(v.text);
+    });
+    var datum = teilT.filter(function (v) { return !/Uhr/i.test(v.text); })[0];
+    var uhr = teilT.filter(function (v) { return /Uhr/i.test(v.text); })[0];
+    var wann = '';
+    if (datum) wann = datum.text.replace(/\s+\d{1,2}$/, '');
+    if (uhr) wann = (wann ? wann + ' ' : '') + uhr.text.replace(/^bis\s+/i, '');
+    var eilig = !!t.eilig || a.urgent;
+    var bisWann = {
+      text: wann || (eilig ? 'dringend, Datum fehlt' : ''),
+      state: t.state === 'ok' ? 'ok' : (wann || eilig ? 'unklar' : 'fehlt'),
+      uhrzeit: !!t.hasUhrzeit,
+      eilig: eilig
+    };
+
+    // ANHANG
+    var d = f.daten;
+    var namen = a.thread.attachmentNames.slice();
+    var anhang = { state: 'nein', namen: namen, erwaehnt: false, fehlend: a.thread.missingFiles.slice() };
+    if (namen.length && anhang.fehlend.length) anhang.state = 'teilweise';
+    else if (namen.length) anhang.state = 'ja';
+    else if (d.vorhanden) anhang.state = 'geliefert';
+    else if (d.folgt) anhang.state = 'folgt';
+    else if (d.state === 'ok') anhang.state = 'ja';
+    else anhang.erwaehnt = a.risiken.some(function (r) { return r.typ === 'anhang_fehlt' || r.typ === 'weiterleitung_ohne_anhang'; });
+
+    return { was: was, bisWann: bisWann, anhang: anhang };
   }
 
   // ---------- Positionen (mehrere Druckarbeiten in einer Mail / auf einem Laufzettel) ----------
@@ -466,7 +529,7 @@
     messages.push({ von: from || '', datum: '', body: firstText });
     cuts.forEach(function (c, i) {
       var stop = i + 1 < cuts.length ? cuts[i + 1].index : text.length;
-      var block = text.slice(c.end, stop);
+      var block = text.slice(c.end, stop).replace(/^[ \t]*\r?\n/, '');
       var datum = c.datum || '';
       if (c.kind === 'header') {
         var dm = /(?:Gesendet|Sent|Datum|Date)\s*:\s*(.+)/i.exec(block.slice(0, 500));
@@ -479,10 +542,19 @@
 
     messages = messages.map(function (msg) {
       var pts = wichtigePunkte(msg.body, null).slice(0, 3);
-      return { von: msg.von, datum: msg.datum, punkte: pts, leer: msg.body.replace(/\s+/g, '').length < 5 };
-    }).filter(function (msg, i) { return !msg.leer || i === 0 && messages.length === 1; });
+      return {
+        von: msg.von, datum: msg.datum, punkte: pts,
+        score: infoScore(msg.body),
+        leer: msg.body.replace(/\s+/g, '').length < 5
+      };
+    }).filter(function (msg, i) { return !msg.leer || (i === 0 && messages.length === 1); });
+
+    // Welche Nachricht enthält die meiste Auftragsinfo? (bei Gleichstand die neueste)
+    var best = 0;
+    messages.forEach(function (m, i) { if (m.score > messages[best].score) best = i; });
 
     return {
+      wichtigste: best,
       forwarded: forwarded,
       attachmentNames: attachmentNames,
       mentionedFiles: mentioned,
@@ -490,6 +562,20 @@
       erwaehntAnhang: erwaehntAnhang,
       messages: messages
     };
+  }
+
+  // Wie viel Auftragsinfo steckt in einem Textstück? 0 = Small Talk ("Danke, schönes Wochenende!")
+  function infoScore(body) {
+    var s = 0;
+    ['format', 'menge', 'papier', 'farbe', 'termin', 'lieferung'].forEach(function (k) {
+      var vals = collect(body, PATTERNS[k]());
+      if (SCHWACH[k]) vals = vals.filter(function (v) { return !SCHWACH[k].test(v.text); });
+      if (vals.length) s++;
+    });
+    DATEI_IN_TEXT.lastIndex = 0;
+    if (DATEI_IN_TEXT.test(body) || /(?<![A-Za-zÄÖÜäöüß])(im Anhang|anbei|beigefügt|Daten folgen)(?![A-Za-zÄÖÜäöüß])/i.test(body)) s++;
+    if (collect(body, [URGENT]).length) s++;
+    return s;
   }
 
   function cleanAbsender(s) {

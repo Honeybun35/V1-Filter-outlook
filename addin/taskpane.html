@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
   <title>Auftrags-Check</title>
   <link rel="stylesheet" href="taskpane.css">
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
@@ -11,55 +12,95 @@
   <div id="demo" class="demo" hidden>
     <strong>Demo-Modus</strong> (außerhalb von Outlook). Testmail wählen oder Text einfügen:
     <select id="demoSelect"></select>
-    <textarea id="demoText" rows="5" placeholder="Mailtext hier einfügen …"></textarea>
-    <button id="demoGo" class="btn">Prüfen</button>
+    <textarea id="demoText" rows="4" placeholder="Mailtext hier einfügen …"></textarea>
+    <button id="demoGo" class="btn" type="button">Prüfen</button>
   </div>
 
-  <header>
-    <div id="subject" class="subject">Keine Mail geöffnet</div>
-    <div id="urgent" class="urgent" hidden>⚡ Eilig / dringend</div>
-  </header>
+  <nav class="tabs">
+    <button id="tabMail" class="tab on" type="button">Diese Mail</button>
+    <button id="tabOver" class="tab" type="button">Übersicht</button>
+    <span id="meTag" class="me-tag"></span>
+  </nav>
 
-  <div id="risks"></div>
+  <!-- ===== Diese Mail ===== -->
+  <main id="viewMail">
+    <section id="kernCard" class="card owner-frame">
+      <div class="ownerline"><span id="ownerLine"></span><span id="eilig" class="eilig" hidden>Eilig</span></div>
+      <h1 id="subject" class="subject">Keine Mail geöffnet</h1>
+      <dl class="kern">
+        <div class="krow"><dt>Was</dt><dd id="kWas"></dd></div>
+        <div class="krow"><dt>Bis wann</dt><dd id="kWann"></dd></div>
+        <div class="krow"><dt>Anhang</dt><dd id="kAnhang"></dd></div>
+      </dl>
+    </section>
 
-  <section id="statusBox" class="box">
-    <div id="ownerBand" class="owner-band" hidden></div>
-    <h2>Bearbeitung</h2>
-    <div class="label">Bearbeiter</div>
-    <div id="people" class="chips"></div>
-    <div class="label">Status</div>
-    <div id="statuses" class="statuses"></div>
-    <div id="current" class="current"></div>
-    <div id="note" class="note" hidden></div>
-  </section>
+    <div id="risks"></div>
 
-  <section id="checkBox" class="box">
-    <h2>Checkliste <span id="counter" class="counter"></span></h2>
-    <ul id="checklist" class="checklist"></ul>
-    <button id="replyBtn" class="btn primary" hidden>Rückfrage zu fehlenden Angaben schreiben</button>
-    <div id="replyHint" class="hint" hidden>Öffnet einen Antwortentwurf. Es wird nichts automatisch gesendet.</div>
-  </section>
+    <section class="card">
+      <div class="label">Bearbeiter</div>
+      <div id="people" class="chips"></div>
+      <div class="label">Status</div>
+      <div id="statuses" class="statuses"></div>
+      <button id="noStatus" class="link" type="button">Kein Status</button>
+      <div id="note" class="note" hidden></div>
+    </section>
 
-  <section id="posBox" class="box" hidden>
-    <h2>Positionen <span id="posCount" class="counter"></span></h2>
-    <ul id="positionen" class="positionen"></ul>
-  </section>
+    <section id="logCard" class="card" hidden>
+      <h2>Aktivität</h2>
+      <ul id="log" class="log"></ul>
+      <div id="gzdHint" class="gzdhint" hidden></div>
+    </section>
 
-  <section id="verlaufBox" class="box" hidden>
-    <h2>Mailverlauf <span id="verlaufCount" class="counter"></span></h2>
-    <ol id="verlauf" class="verlauf"></ol>
-  </section>
+    <section id="verlaufBox" class="card" hidden>
+      <h2>Mailverlauf <span id="verlaufInfo" class="h2info"></span></h2>
+      <ol id="verlauf" class="verlauf"></ol>
+    </section>
 
-  <section id="punkteBox" class="box" hidden>
-    <h2>Wichtige Stellen in der Mail</h2>
-    <ul id="punkte" class="punkte"></ul>
-  </section>
+    <section id="replyCard" class="card" hidden>
+      <button id="replyBtn" class="btn primary" type="button">Rückfrage schreiben</button>
+      <div class="hint">Öffnet einen Entwurf an den Absender. Es wird nichts automatisch gesendet.
+        <button id="copyBtn" class="link" type="button">Text stattdessen kopieren</button></div>
+      <label class="check"><input id="detailsInReply" type="checkbox"> auch Details (Papier, Farbe, Lieferung …) abfragen</label>
+      <div id="copyBox" hidden><textarea id="copyText" rows="8"></textarea></div>
+    </section>
 
-  <details class="box settings">
+    <details class="card details">
+      <summary>Details <span id="counter" class="h2info"></span></summary>
+      <ul id="checklist" class="checklist"></ul>
+      <div id="posBox" hidden>
+        <h3>Positionen <span id="posCount" class="h2info"></span></h3>
+        <ul id="positionen" class="positionen"></ul>
+      </div>
+      <div id="punkteBox" hidden>
+        <h3>Wichtige Stellen</h3>
+        <ul id="punkte" class="punkte"></ul>
+      </div>
+    </details>
+  </main>
+
+  <!-- ===== Übersicht ===== -->
+  <main id="viewOver" hidden>
+    <div id="overNotice" class="card notice" hidden></div>
+    <div id="overBar" class="overbar">
+      <input id="overSearch" type="search" placeholder="Suchen …">
+      <div class="filterrow"><span class="flabel">MA</span><div id="overMa" class="chips"></div></div>
+      <div class="filterrow"><span class="flabel">Status</span><div id="overSt" class="chips"></div></div>
+      <div class="filterrow"><span class="flabel">Sortierung</span>
+        <div class="chips">
+          <button id="sortWichtig" class="chip on" type="button">Wichtig zuerst</button>
+          <button id="sortNeu" class="chip" type="button">Neueste zuerst</button>
+        </div>
+      </div>
+      <div id="overCount" class="overcount"></div>
+    </div>
+    <ul id="overList" class="overlist"></ul>
+  </main>
+
+  <details class="card settings">
     <summary>Einstellungen</summary>
     <label class="label" for="meSelect">Ich bin</label>
     <select id="meSelect"></select>
-    <button id="saveSettings" class="btn">Speichern</button>
+    <button id="saveSettings" class="btn" type="button">Speichern</button>
     <div id="settingsMsg" class="hint"></div>
   </details>
 
