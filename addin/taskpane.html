@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Auftrags-Check</title>
+  <link rel="stylesheet" href="taskpane.css">
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body>
+  <div id="demo" class="demo" hidden>
+    <strong>Demo-Modus</strong> (außerhalb von Outlook). Testmail wählen oder Text einfügen:
+    <select id="demoSelect"></select>
+    <textarea id="demoText" rows="5" placeholder="Mailtext hier einfügen …"></textarea>
+    <button id="demoGo" class="btn">Prüfen</button>
+  </div>
+
+  <header>
+    <div id="subject" class="subject">Keine Mail geöffnet</div>
+    <div id="urgent" class="urgent" hidden>⚡ Eilig / dringend</div>
+  </header>
+
+  <div id="risks"></div>
+
+  <section id="statusBox" class="box">
+    <div id="ownerBand" class="owner-band" hidden></div>
+    <h2>Bearbeitung</h2>
+    <div class="label">Bearbeiter</div>
+    <div id="people" class="chips"></div>
+    <div class="label">Status</div>
+    <div id="statuses" class="statuses"></div>
+    <div id="current" class="current"></div>
+    <div id="note" class="note" hidden></div>
+  </section>
+
+  <section id="checkBox" class="box">
+    <h2>Checkliste <span id="counter" class="counter"></span></h2>
+    <ul id="checklist" class="checklist"></ul>
+    <button id="replyBtn" class="btn primary" hidden>Rückfrage zu fehlenden Angaben schreiben</button>
+    <div id="replyHint" class="hint" hidden>Öffnet einen Antwortentwurf. Es wird nichts automatisch gesendet.</div>
+  </section>
+
+  <section id="posBox" class="box" hidden>
+    <h2>Positionen <span id="posCount" class="counter"></span></h2>
+    <ul id="positionen" class="positionen"></ul>
+  </section>
+
+  <section id="verlaufBox" class="box" hidden>
+    <h2>Mailverlauf <span id="verlaufCount" class="counter"></span></h2>
+    <ol id="verlauf" class="verlauf"></ol>
+  </section>
+
+  <section id="punkteBox" class="box" hidden>
+    <h2>Wichtige Stellen in der Mail</h2>
+    <ul id="punkte" class="punkte"></ul>
+  </section>
+
+  <details class="box settings">
+    <summary>Einstellungen</summary>
+    <label class="label" for="meSelect">Ich bin</label>
+    <select id="meSelect"></select>
+    <button id="saveSettings" class="btn">Speichern</button>
+    <div id="settingsMsg" class="hint"></div>
+  </details>
+
+  <script src="team.js"></script>
+  <script src="parser.js"></script>
+  <script src="testmails.js"></script>
+  <script src="taskpane.js"></script>
+</body>
+</html>

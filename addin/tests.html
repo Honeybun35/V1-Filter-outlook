@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><title>Parser-Tests</title>
+<style>body{font:14px Segoe UI,Arial;margin:20px}.ok{color:#0a7d2c}.bad{color:#b00020;font-weight:600}pre{background:#f4f4f4;padding:8px}</style>
+</head><body>
+<h2>Parser-Tests</h2>
+<div id="out"></div>
+<script src="parser.js"></script>
+<script src="testmails.js"></script>
+<script>
+var out = document.getElementById('out');
+var fail = 0, total = 0;
+window.TESTMAILS.forEach(function (t) {
+  var a = Auftrag.analyse(t);
+  var html = '<h3>' + t.name + '</h3>';
+  Object.keys(t.erwartet).forEach(function (k) {
+    total++;
+    var got = a.fields[k].state;
+    var good = got === t.erwartet[k];
+    if (!good) fail++;
+    html += '<div class="' + (good ? 'ok' : 'bad') + '">' + (good ? '✓' : '✗') + ' ' + k +
+      ': erwartet ' + t.erwartet[k] + ', bekommen ' + got + ' [' + a.fields[k].values.map(function (v) { return v.text; }).join(' | ') + ']</div>';
+  });
+  function check(label, good, got) {
+    total++;
+    if (!good) fail++;
+    html += '<div class="' + (good ? 'ok' : 'bad') + '">' + (good ? '✓' : '✗') + ' ' + label + ' [' + got + ']</div>';
+  }
+  if ('risiko' in t) {
+    var typ = a.risiken.length ? a.risiken[0].typ : null;
+    check('risiko = ' + t.risiko, typ === t.risiko, typ);
+  }
+  if ('fehlende' in t) {
+    var fm = a.risiken.length ? a.risiken[0].details.length : 0;
+    check('fehlende Dateien = ' + t.fehlende, fm === t.fehlende, fm);
+  }
+  (t.pflichtNicht || []).forEach(function (k) {
+    check('Pflicht: ' + k + ' ist NICHT Pflicht', a.fields[k].required === false, a.fields[k].required);
+  });
+  (t.pflichtJa || []).forEach(function (k) {
+    check('Pflicht: ' + k + ' ist Pflicht', a.fields[k].required === true, a.fields[k].required);
+  });
+  if ('positionenMin' in t) {
+    check('mindestens ' + t.positionenMin + ' Positionen', a.positionen.length >= t.positionenMin,
+      a.positionen.map(function (p) { return p.text + ' → ' + (p.fehlt.length ? 'fehlt ' + p.fehlt.join('/') : 'komplett'); }).join(' | '));
+  }
+  if ('nachrichten' in t) {
+    check('Nachrichten im Verlauf = ' + t.nachrichten, a.thread.messages.length === t.nachrichten,
+      a.thread.messages.map(function (m) { return m.von || '?'; }).join(' / '));
+  }
+  out.insertAdjacentHTML('beforeend', html);
+});
+out.insertAdjacentHTML('afterbegin', '<h3 id="summary" class="' + (fail ? 'bad' : 'ok') + '">' + (total - fail) + ' / ' + total + ' Prüfungen bestanden</h3>');
+// Rückfrage-Beispiel
+var a0 = Auftrag.analyse(window.TESTMAILS[0]);
+out.insertAdjacentHTML('beforeend', '<h3>Rückfrage Beispiel (Mail 1)</h3><pre>' + Auftrag.rueckfrage(a0) + '</pre>');
+</script></body></html>
