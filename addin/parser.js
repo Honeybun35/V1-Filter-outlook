@@ -369,6 +369,24 @@
     return out;
   }
 
+  // Steht kein Farbprofil in der Mail, wird es aus dem Papier abgeleitet:
+  // Naturpapier / ungestrichen -> Uncoated, gestrichenes Papier -> Coated.
+  var PAPIER_UNCOATED = wb('ungestrichen(?:es|e|en)?|Naturpapier|Natur|Recycling(?:papier)?|Offsetpapier|Offset|Kopierpapier|Werkdruck|Bond|Zeichenpapier|Pergament|Munken|Lux\\s?Cream|Image\\s?Impact|DCP|Rives|Conqueror|Fedrigoni\\s?Arena|Arena|Papier\\s?uncoated|uncoated|Karton\\s?(?:ungestrichen|natur)', 'gi');
+  var PAPIER_COATED = wb('gestrichen(?:es|e|en)?|Bilderdruck(?:papier)?|Bilderdruck|Kunstdruck|Chromo(?:duplex)?|Glanzpapier|Hochglanz|Glossy|Seidenmatt|Silk|Satin|Maranello|Magno|Profi\\s?Silk|Fotopapier|Photopapier|Fotoglanz|coated|Bilderdruck\\s?(?:matt|glänzend|glanz)|(?:matt|glänzend|glanz)\\s?gestrichen', 'gi');
+
+  function profilAusPapier(full) {
+    var un = collect(full, [PAPIER_UNCOATED]);
+    // "ungestrichen" enthält "gestrichen": Treffer von ungestrichen nicht als coated zählen
+    var co = collect(full, [PAPIER_COATED]).filter(function (c) {
+      return !un.some(function (u) { return u.index <= c.index && c.index < u.index + u.text.length + 2; }) &&
+             !/ungestrichen/i.test(full.substr(Math.max(0, c.index - 2), c.text.length + 2));
+    });
+    if (un.length && !co.length) return 'Uncoated (aus Papier: ' + un[0].text + ')';
+    if (co.length && !un.length) return 'Coated (aus Papier: ' + co[0].text + ')';
+    if (un.length && co.length) return 'unklar: Papier gestrichen und ungestrichen genannt';
+    return '';
+  }
+
   // ---------- Polygrafen: Seitenumfang, wie gedruckt, Farbprofil, Papier ----------
   function bauePolygraf(full, result) {
     var texte = function (list) { return list.map(function (v) { return v.text; }); };
@@ -384,10 +402,17 @@
     var profil = collect(full, [
       wb('ISO[\\s-]?Coated(?:[\\s-]?v2)?(?:[\\s-]?300)?|PSO[\\s-]?(?:Coated|Uncoated|LWC)[\\w\\s-]{0,12}?|FOGRA\\s?\\d{2}[a-z]?|ECI[\\s-]?RGB(?:\\s?v2)?|sRGB|Adobe[\\s-]?RGB|ICC[\\s-]?Profile?n?|Farbprofile?n?|Euroskala|Pantone|HKS|CMYK|RGB', 'gi')
     ]);
+    var profilTexte = texte(profil);
+    var abgeleitet = false;
+    if (!profilTexte.length) {
+      var abg = profilAusPapier(full);
+      if (abg) { profilTexte = [abg]; abgeleitet = true; }
+    }
     return {
       seiten: texte(seiten),
       druck: texte(druck),
-      profil: texte(profil),
+      profil: profilTexte,
+      profilAbgeleitet: abgeleitet,
       papier: texte(result.papier.values)
     };
   }

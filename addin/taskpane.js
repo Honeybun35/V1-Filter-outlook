@@ -4,11 +4,11 @@
 (function () {
   'use strict';
 
-  var STATUS = ['Warten', 'Daten folgen', 'In Bearbeitung', 'GZD warten', 'Erledigt'];
+  var STATUS = ['Warten', 'Daten folgen', 'In Bearbeitung', 'GZD warten', 'Erledigt', 'Zur Kenntnisnahme'];
   // Schriftfarbe je Status (Akzent, sonst ist alles weiß)
   var STATUS_FARBE = {
     'Warten': '#b7791f', 'Daten folgen': '#c05621', 'In Bearbeitung': '#2b6cb0',
-    'GZD warten': '#6b46c1', 'Erledigt': '#2f855a'
+    'GZD warten': '#6b46c1', 'Erledigt': '#2f855a', 'Zur Kenntnisnahme': '#0f766e'
   };
   var SEP = ' · ';
   var STATUS_RE = new RegExp('^(.+?)' + SEP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(' + STATUS.join('|') + ')$');
@@ -346,6 +346,7 @@
     zeigeListe('kSeiten', pg.seiten);
     zeigeListe('kDruck', pg.druck);
     zeigeListe('kProfil', pg.profil);
+    if (pg.profilAbgeleitet) $('kProfil').appendChild(el('span', 'sub', 'vom Papier abgeleitet'));
     zeigeListe('kPapier', pg.papier);
 
     // Kurzfassung: nur das Wichtigste in Kurzform
@@ -524,8 +525,8 @@
     var ok = 0, total = 0;
     a.order.forEach(function (key) {
       var f = a.fields[key];
-      var li = el('li', f.state + (f.required ? '' : ' optional'));
-      var icon = f.state === 'ok' ? '✓' : (f.state === 'fehlt' ? '✗' : (f.state === 'folgt' ? '⏳' : '!'));
+      var li = el('li', (f.state === 'fehlt' ? 'nichts' : f.state) + (f.required ? '' : ' optional'));
+      var icon = f.state === 'ok' ? '✓' : (f.state === 'fehlt' ? '' : (f.state === 'folgt' ? '⏳' : '✗'));
       li.appendChild(el('div', 'icon', icon));
       var main = el('div');
       main.appendChild(el('div', 'flabel', f.label + (f.required ? '' : ' (Zusatz)')));
@@ -761,7 +762,7 @@
     var cSt = countBy(all, function (it) { return it.status ? it.status.s : 'ohne'; });
 
     var maEntries = [{ key: 'alle', label: 'Alle ' + all.length }]
-      .concat(state.team.map(function (k) { return { key: k, label: k + ' ' + (cMa[k] || 0) }; }))
+      .concat(state.team.map(function (k) { return { key: k, label: person(k).name + ' ' + (cMa[k] || 0) }; }))
       .concat([{ key: 'ohne', label: 'Ohne ' + (cMa.ohne || 0) }]);
     chipRow($('overMa'), maEntries, o.ma, function (k) { o.ma = k; renderOverview(); },
       function (k) { return (k === 'alle' || k === 'ohne') ? '' : person(k).farbe; });
