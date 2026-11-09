@@ -89,6 +89,11 @@
 
   var MENGE_EINHEIT = 'Stück|Stk\\.?|St\\.|Exemplare?|Ex\\.?|Expl\\.?|Ausdrucke?|Drucke?|Plakate?|Poster|Banner|Flyer|Karten|Visitenkarten|Postkarten|Aufkleber|Schilder|Roll-?ups?|Broschüren|Mappen|Sets?|Bögen|Blatt|Kopien|Pläne|Plots?|Folien|fach';
 
+  // ---------- Papiersorten (Markennamen) ----------
+  // Ungestrichen = Uncoated, gestrichen = Coated. Neue Sorten einfach hier ergänzen.
+  var MARKEN_UNCOATED = 'Image\\s?Impact|DCP|[NM]ormaset(?:\\s?Puro)?|Munken(?:\\s?(?:Pure|Print|Lynx|Polar|Kristall))?|Rebello|Balance\\s?Pure|Amber\\s?Graphic|Color\\s?Copy|Lessebo|Arena|Rives|Conqueror|Lux\\s?Cream|Plano(?:plus|jet|tint)?|Classen|Enviro\\w*|Circle\\s?Offset|Recystar|Tauro|Sirio|Keaykolour|Curious|Pop\\s?\'?Set|Materica|Freelife|Inapa\\s?Infinity|Biotop|Envirotop|Steinbeis';
+  var MARKEN_COATED = 'Magno(?:\\s?(?:Satin|Gloss|Star|Volume|Matt|Plus))?|Profi\\s?Silk|Profi\\s?Gloss|LuxoArt(?:\\s?(?:Samt|Silk|Gloss))?|Galaxi\\w*|Arctic\\s?(?:Volume|Silk|Gloss)|Maxi\\s?(?:Silk|Gloss)|Hello\\s?(?:Silk|Gloss|Matt)|Gardapat\\w*|Garda\\s?(?:Silk|Gloss|Matt)|Condat\\w*|Phoenixmotion|Heaven\\s?42|Symbol\\s?(?:Matt|Gloss|Silk|Tatami)\\w*|Invercote|Algro\\s?Design|Maranello|Igloo\\s?Silk|Respecta\\w*';
+
   // ---------- Muster je Feld ----------
   var PATTERNS = {
     format: function () {
@@ -112,7 +117,7 @@
     papier: function () {
       return [
         /(?<![\d.,])\d{2,3}\s?(?:g\/m²|g\/m2|g\/qm|g\/sm|gm²|gm2|gsm|gr\b|g(?![A-Za-z])|Gramm)/gi,
-        wb('Image Impact|DCP|Maranello|Bilderdruck|Offsetpapier|Offset|Naturpapier|Recyclingpapier|Recycling|Karton|Pappe|Plakatpapier|Fotopapier|Photopapier|Fotoglanz|Glanzpapier|Mattpapier|gestrichen(?:es)?|ungestrichen(?:es)?|Kopierpapier|Bond|Tyvek|Banner(?:stoff)?|Mesh|Klebefolie|Folie|Leinwand|Canvas|Dibond|Forex|Kapa|Synthetik(?:papier)?|Blueback|Whiteback|Vlies|Textil|Transparentpapier|Pergament|Zeichenpapier|Seidenmatt|Hochglanz|Glossy|Satin|Papier|Material', 'gi'),
+        wb(MARKEN_UNCOATED + '|' + MARKEN_COATED + '|Bilderdruck|Offsetpapier|Offset|Naturpapier|Recyclingpapier|Recycling|Karton|Pappe|Plakatpapier|Fotopapier|Photopapier|Fotoglanz|Glanzpapier|Mattpapier|gestrichen(?:es)?|ungestrichen(?:es)?|Kopierpapier|Bond|Tyvek|Banner(?:stoff)?|Mesh|Klebefolie|Folie|Leinwand|Canvas|Dibond|Forex|Kapa|Synthetik(?:papier)?|Blueback|Whiteback|Vlies|Textil|Transparentpapier|Pergament|Zeichenpapier|Seidenmatt|Hochglanz|Glossy|Satin|Papier|Material', 'gi'),
         wb('matt(?:es|e)?|glänzend|glanz', 'g')
       ];
     },
@@ -371,8 +376,8 @@
 
   // Steht kein Farbprofil in der Mail, wird es aus dem Papier abgeleitet:
   // Naturpapier / ungestrichen -> Uncoated, gestrichenes Papier -> Coated.
-  var PAPIER_UNCOATED = wb('ungestrichen(?:es|e|en)?|Naturpapier|Natur|Recycling(?:papier)?|Offsetpapier|Offset|Kopierpapier|Werkdruck|Bond|Zeichenpapier|Pergament|Munken|Lux\\s?Cream|Image\\s?Impact|DCP|Rives|Conqueror|Fedrigoni\\s?Arena|Arena|Papier\\s?uncoated|uncoated|Karton\\s?(?:ungestrichen|natur)', 'gi');
-  var PAPIER_COATED = wb('gestrichen(?:es|e|en)?|Bilderdruck(?:papier)?|Bilderdruck|Kunstdruck|Chromo(?:duplex)?|Glanzpapier|Hochglanz|Glossy|Seidenmatt|Silk|Satin|Maranello|Magno|Profi\\s?Silk|Fotopapier|Photopapier|Fotoglanz|coated|Bilderdruck\\s?(?:matt|glänzend|glanz)|(?:matt|glänzend|glanz)\\s?gestrichen', 'gi');
+  var PAPIER_UNCOATED = wb('ungestrichen(?:es|e|en)?|Naturpapier|Natur|Recycling(?:papier)?|Offsetpapier|Offset|Kopierpapier|Werkdruck|Bond|Zeichenpapier|Pergament|Fedrigoni\\s?Arena|Papier\\s?uncoated|uncoated|Karton\\s?(?:ungestrichen|natur)|' + MARKEN_UNCOATED, 'gi');
+  var PAPIER_COATED = wb('gestrichen(?:es|e|en)?|Bilderdruck(?:papier)?|Bilderdruck|Kunstdruck|Chromo(?:duplex)?|Glanzpapier|Hochglanz|Glossy|Seidenmatt|Silk|Satin|Fotopapier|Photopapier|Fotoglanz|coated|Bilderdruck\\s?(?:matt|glänzend|glanz)|(?:matt|glänzend|glanz)\\s?gestrichen|' + MARKEN_COATED, 'gi');
 
   function profilAusPapier(full) {
     var un = collect(full, [PAPIER_UNCOATED]);
