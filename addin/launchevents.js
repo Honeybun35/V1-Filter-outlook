@@ -4,7 +4,7 @@
 
 var GZD_TEXT = /(gut\s+zum\s+druck|\bgzd\b|g\.\s?z\.\s?d\.|druckfreigabe|korrekturabzug)/i;
 var GZD_DATEI = /(gzd|gut[\s_\-]?zum[\s_\-]?druck|korrektur|freigabe)/i;
-var TEAM_PRESET = { SRu: 1, THe: 7, FSt: 4, JRe: 8, VHa: 12, Offen: 13 };
+var TEAM_PRESET = { SRu: 8, THe: 7, FSt: 4, JRe: 1 };
 
 function onMessageSendHandler(event) {
   try {
@@ -33,7 +33,7 @@ function onMessageSendHandler(event) {
 function kategorieSetzen(item, done) {
   var me = '';
   try { me = Office.context.roamingSettings.get('me') || ''; } catch (e) { }
-  var cat = (me ? me + ' · ' : '') + 'GZD warten';
+  var cat = (me ? me + ' · ' : '') + '4 GZD warten';
   var mc = Office.context.mailbox.masterCategories;
   var add = function () {
     item.categories.addAsync([cat], function () { done(); });

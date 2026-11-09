@@ -4,20 +4,32 @@
 (function () {
   'use strict';
 
-  var STATUS = ['Warten', 'Daten folgen', 'In Bearbeitung', 'GZD warten', 'Erledigt', 'Zur Kenntnisnahme'];
+  // Ein Status ist freiwillig: Nur der Name (Kürzel) als Kategorie ist erlaubt = "ohne Status"
+  var STATUS = ['Warten', 'Daten folgen', 'In Bearbeitung', 'GZD warten', 'Zur Ansicht', 'Zur Kenntnisnahme', 'Erledigt'];
   // Schriftfarbe je Status (Akzent, sonst ist alles weiß)
   var STATUS_FARBE = {
     'Warten': '#b7791f', 'Daten folgen': '#c05621', 'In Bearbeitung': '#2b6cb0',
-    'GZD warten': '#6b46c1', 'Erledigt': '#2f855a', 'Zur Kenntnisnahme': '#0f766e'
+    'GZD warten': '#6b46c1', 'Zur Ansicht': '#4a5568', 'Zur Kenntnisnahme': '#718096', 'Erledigt': '#2f855a'
   };
   var SEP = ' · ';
-  var STATUS_RE = new RegExp('^(.+?)' + SEP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(' + STATUS.join('|') + ')$');
+  // Kategorie-Name mit Ziffer, damit Outlook nach Person und dann in fester Status-Reihenfolge sortiert:
+  // "THe · 3 In Bearbeitung". Die alte Schreibweise ohne Ziffer wird weiter erkannt.
+  var STATUS_RE = new RegExp('^(.+?)' + SEP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?:\\d )?(' + STATUS.join('|') + ')$');
+  var DRINGEND = '!! Dringend';
+  function catName(p, status) {
+    return status ? p + SEP + (STATUS.indexOf(status) + 1) + ' ' + status : p;
+  }
   var TEAM = window.TEAM || [];
   var CORE = ['menge', 'format', 'termin', 'daten']; // Was (Menge, Format), Bis wann, Anhang
 
   function person(k) {
     for (var i = 0; i < TEAM.length; i++) if (TEAM[i].kuerzel === k) return TEAM[i];
     return { kuerzel: k, name: k, farbe: '#6b7280', preset: 12 };
+  }
+
+  // Gehört die Kategorie zu uns? ("THe · Warten" oder nur "THe")
+  function isOwnCat(c) {
+    return STATUS_RE.exec(c) !== null || TEAM.some(function (t) { return t.kuerzel === c; });
   }
 
   var state = {
@@ -58,7 +70,6 @@
     var sel = $('meSelect');
     sel.innerHTML = '<option value="">– bitte wählen –</option>';
     TEAM.forEach(function (t) {
-      if (t.keinePerson) return;
       var o = el('option', null, t.name);
       o.value = t.kuerzel;
       sel.appendChild(o);
@@ -171,6 +182,11 @@
       var m = STATUS_RE.exec(state.categories[i]);
       if (m) return { person: m[1], status: m[2] };
     }
+    // Nur der Name, ohne Status
+    for (var j = 0; j < state.categories.length; j++) {
+      var c = state.categories[j];
+      if (TEAM.some(function (t) { return t.kuerzel === c; })) return { person: c, status: '' };
+    }
     return null;
   }
 
@@ -190,27 +206,26 @@
   function parseLog(raw) {
     return String(raw || '').split(';').filter(Boolean).map(function (p) {
       var a = p.split('|');
-      var s = a[1] === 'x' ? 'x' : STATUS[parseInt(a[1], 10)];
+      var s = (a[1] === 'x' || a[1] === 'n' || a[1] === 'o') ? a[1] : STATUS[parseInt(a[1], 10)];
       return { p: a[0], s: s, t: parseInt(a[2], 10) * 60000, a: a[3] || '' };
     }).filter(function (e) { return e.s && !isNaN(e.t); });
   }
 
   function serializeLog(list) {
     return list.map(function (e) {
-      return [e.p, e.s === 'x' ? 'x' : STATUS.indexOf(e.s), Math.floor(e.t / 60000), e.a || ''].join('|');
+      var code = (e.s === 'x' || e.s === 'n' || e.s === 'o') ? e.s : STATUS.indexOf(e.s);
+      return [e.p, code, Math.floor(e.t / 60000), e.a || ''].join('|');
     }).join(';');
   }
 
   function loadLog(done) {
     state.log = [];
-    state.notiz = '';
     state.props = null;
     if (!state.item || !state.item.loadCustomPropertiesAsync) { done(); return; }
     state.item.loadCustomPropertiesAsync(function (r) {
       if (r.status === Office.AsyncResultStatus.Succeeded) {
         state.props = r.value;
         state.log = parseLog(r.value.get('ac_log'));
-        state.notiz = r.value.get('ac_notiz') || '';
       }
       done();
     });
@@ -242,8 +257,8 @@
   function showEmpty() {
     state.item = null; state.analysis = null;
     $('subject').textContent = 'Keine Mail geöffnet';
-    ['kWas', 'kWann', 'kAnhang', 'ownerLine', 'risks', 'log', 'checklist'].forEach(function (id) { $(id).innerHTML = ''; });
-    ['eilig', 'sonderCard', 'kurz', 'logCard', 'replyCard', 'posBox', 'punkteBox'].forEach(function (id) { $(id).hidden = true; });
+    ['kWas', 'kWann', 'kAnhang', 'ownerLine', 'risks', 'log', 'verlauf', 'checklist'].forEach(function (id) { $(id).innerHTML = ''; });
+    ['eilig', 'logCard', 'verlaufBox', 'replyCard', 'posBox', 'punkteBox'].forEach(function (id) { $(id).hidden = true; });
     $('kernCard').style.borderColor = '';
     renderStatus();
   }
@@ -251,12 +266,10 @@
   function render() {
     if (!state.analysis) { showEmpty(); return; }
     renderKern();
-    renderPoly();
-    renderSonder();
-    renderNotiz();
     renderRisks();
     renderStatus();
     renderLog();
+    renderVerlauf();
     renderReply();
     renderDetails();
   }
@@ -274,13 +287,15 @@
     if (cur) {
       var pe = person(cur.person);
       col = pe.farbe;
-      var n = el('span', null, pe.name);
+      var n = el('span', null, pe.kuerzel);
       n.style.color = pe.farbe;
       line.appendChild(n);
-      line.appendChild(document.createTextNode(' · '));
-      var s = el('span', null, cur.status);
-      s.style.color = STATUS_FARBE[cur.status];
-      line.appendChild(s);
+      if (cur.status) {
+        line.appendChild(document.createTextNode(' · '));
+        var s = el('span', null, cur.status);
+        s.style.color = STATUS_FARBE[cur.status];
+        line.appendChild(s);
+      }
     } else {
       line.appendChild(el('span', 'muted', 'Noch kein Bearbeiter'));
     }
@@ -329,72 +344,6 @@
     }
   }
 
-  // ---------- Druckangaben, Sonderwünsche, Notiz ----------
-  function zeigeListe(id, liste) {
-    var d = $(id);
-    d.innerHTML = '';
-    if (liste && liste.length) d.appendChild(document.createTextNode(liste.slice(0, 3).join(', ')));
-    else d.appendChild(el('span', 'none', 'nicht genannt'));
-  }
-
-  function kurzText(s) {
-    return String(s).replace(/\s*(Seiten|Seiter)\b/i, ' S').replace(/Exemplare?/i, 'Ex').replace(/\s+/g, ' ').trim();
-  }
-
-  function renderPoly() {
-    var a = state.analysis, pg = a.polygraf || {};
-    zeigeListe('kSeiten', pg.seiten);
-    zeigeListe('kDruck', pg.druck);
-    zeigeListe('kProfil', pg.profil);
-    if (pg.profilAbgeleitet) $('kProfil').appendChild(el('span', 'sub', 'vom Papier abgeleitet'));
-    zeigeListe('kPapier', pg.papier);
-
-    // Kurzfassung: nur das Wichtigste in Kurzform
-    var teile = [];
-    var k = a.kern;
-    if (k.was.text) teile.push(kurzText(k.was.text));
-    if (pg.seiten && pg.seiten[0]) teile.push(kurzText(pg.seiten[0]));
-    if (pg.druck && pg.druck[0]) teile.push(kurzText(pg.druck[0]));
-    if (pg.profil && pg.profil[0]) teile.push(kurzText(pg.profil[0]));
-    if (pg.papier && pg.papier[0]) teile.push(kurzText(pg.papier[0]));
-    if (k.bisWann.text) teile.push('bis ' + k.bisWann.text.replace(/^bis\s+/i, ''));
-    var kz = $('kurz');
-    kz.textContent = teile.join(' · ');
-    kz.hidden = !teile.length;
-  }
-
-  function renderSonder() {
-    var s = state.analysis.sonder || [];
-    var card = $('sonderCard'), ul = $('sonderList');
-    ul.innerHTML = '';
-    card.hidden = !s.length;
-    var titel = { format: 'Format', dringend: 'Dringend', zeit: 'Zeit' };
-    s.forEach(function (x) {
-      var li = el('li');
-      li.appendChild(el('mark', null, x.text));
-      li.appendChild(el('span', 'tag', (titel[x.typ] || '') + (x.hinweis && x.typ === 'zeit' ? ' (' + x.hinweis + ')' : x.typ === 'format' ? ' (kein DIN)' : '')));
-      ul.appendChild(li);
-    });
-  }
-
-  function renderNotiz() {
-    $('notiz').value = state.notiz || '';
-    $('notizMsg').textContent = '';
-  }
-
-  function saveNotiz() {
-    if (!state.item) return;
-    state.notiz = $('notiz').value.slice(0, 1500);
-    if (state.demo) { $('notizMsg').textContent = 'Gespeichert (Demo).'; return; }
-    if (!state.props) { $('notizMsg').textContent = 'Konnte nicht gespeichert werden.'; return; }
-    try {
-      state.props.set('ac_notiz', state.notiz);
-      state.props.saveAsync(function (r) {
-        $('notizMsg').textContent = r.status === Office.AsyncResultStatus.Succeeded ? 'Gespeichert.' : 'Konnte nicht gespeichert werden.';
-      });
-    } catch (e) { $('notizMsg').textContent = 'Konnte nicht gespeichert werden.'; }
-  }
-
   function renderRisks() {
     var box = $('risks');
     box.innerHTML = '';
@@ -415,11 +364,17 @@
     peopleBox.innerHTML = '';
     state.team.forEach(function (k) {
       var pe = person(k);
-      var b = el('button', 'chip' + (k === state.person ? ' on' : ''), pe.name);
+      var b = el('button', 'chip' + (k === state.person ? ' on' : ''), k);
       b.type = 'button';
       b.title = pe.name;
       if (k === state.person) { b.style.borderColor = pe.farbe; b.style.color = pe.farbe; }
-      b.onclick = function () { state.person = k; renderStatus(); };
+      // Klick auf einen Namen weist die Mail sofort zu. Ein vorhandener Status bleibt.
+      b.onclick = function () {
+        state.person = k;
+        var c = currentStatus();
+        if (state.item) setStatus(c ? c.status : '');
+        else renderStatus();
+      };
       peopleBox.appendChild(b);
     });
 
@@ -437,6 +392,7 @@
       box.appendChild(b);
     });
     $('noStatus').hidden = !cur;
+    $('noStatus').textContent = cur && !cur.status ? 'Zuweisung entfernen' : 'Kein Status';
   }
 
   function renderLog() {
@@ -450,7 +406,11 @@
       n.style.color = person(e.p).farbe;
       li.appendChild(n);
       if (e.s === 'x') {
+        li.appendChild(document.createTextNode(' hat die Zuweisung entfernt'));
+      } else if (e.s === 'o') {
         li.appendChild(document.createTextNode(' hat den Status entfernt'));
+      } else if (e.s === 'n') {
+        li.appendChild(document.createTextNode(' hat ' + (e.a || 'jemanden') + ' zugewiesen'));
       } else {
         li.appendChild(document.createTextNode(' hat auf '));
         var s = el('b', null, e.s);
@@ -525,8 +485,8 @@
     var ok = 0, total = 0;
     a.order.forEach(function (key) {
       var f = a.fields[key];
-      var li = el('li', (f.state === 'fehlt' ? 'nichts' : f.state) + (f.required ? '' : ' optional'));
-      var icon = f.state === 'ok' ? '✓' : (f.state === 'fehlt' ? '' : (f.state === 'folgt' ? '⏳' : '✗'));
+      var li = el('li', f.state + (f.required ? '' : ' optional'));
+      var icon = f.state === 'ok' ? '✓' : (f.state === 'fehlt' ? '✗' : (f.state === 'folgt' ? '⏳' : '!'));
       li.appendChild(el('div', 'icon', icon));
       var main = el('div');
       main.appendChild(el('div', 'flabel', f.label + (f.required ? '' : ' (Zusatz)')));
@@ -595,30 +555,38 @@
     try { return Office.MailboxEnums.CategoryColor['Preset' + person(k).preset]; } catch (e) { return undefined; }
   }
 
-  function setStatus(status) {
+  // status = '' bedeutet: nur der Name (Bearbeiter), kein Status
+  function setStatus(status, logCode) {
     if (!state.item) return;
     var p = state.person || state.me || state.team[0];
     var actor = state.me || p;
-    var cat = p + SEP + status;
+    var cat = catName(p, status);
+    var urgent = !!(state.analysis && state.analysis.kern && state.analysis.kern.bisWann.eilig);
+    var wantUrgent = urgent && status !== 'Erledigt';
+    var code = status || logCode || 'n';
 
     if (state.demo) {
-      state.categories = state.categories.filter(function (c) { return !STATUS_RE.test(c); }).concat([cat]);
+      state.categories = state.categories.filter(function (c) { return !isOwnCat(c); }).concat([cat]);
       state.demoCats[state.itemKey] = state.categories;
-      addLog(actor, status, p);
-      afterSet(status);
+      addLog(actor, code, p);
+      afterSet(code);
       return;
     }
 
     ensureMaster(cat, p, function () {
-      var old = state.categories.filter(function (c) { return STATUS_RE.test(c) && c !== cat; });
+      var old = state.categories.filter(function (c) { return isOwnCat(c) && c !== cat; });
+      // "!! Dringend" bei eiligen Mails dazu, bei "Erledigt" wieder weg
+      if (!wantUrgent && state.categories.indexOf(DRINGEND) !== -1) old.push(DRINGEND);
+      var neu = [cat];
+      if (wantUrgent && state.categories.indexOf(DRINGEND) === -1) neu.push(DRINGEND);
       var add = function () {
-        state.item.categories.addAsync([cat], function (r) {
+        state.item.categories.addAsync(neu, function (r) {
           if (r.status !== Office.AsyncResultStatus.Succeeded) {
             note('Konnte Kategorie nicht setzen: ' + (r.error && r.error.message), 'err');
             return;
           }
-          addLog(actor, status, p);
-          readCategories(function () { afterSet(status); });
+          addLog(actor, code, p);
+          readCategories(function () { afterSet(code); });
         });
       };
       if (old.length) state.item.categories.removeAsync(old, function () { add(); });
@@ -626,13 +594,21 @@
     });
   }
 
+  // 1. Klick: Status entfernen, Name bleibt. Danach: auch den Namen entfernen.
   function removeStatus() {
+    var cur = currentStatus();
+    if (!cur || !state.item) return;
+    if (cur.status) setStatus('', 'o');
+    else removeAll();
+  }
+
+  function removeAll() {
     if (!state.item) return;
-    var old = state.categories.filter(function (c) { return STATUS_RE.test(c); });
+    var old = state.categories.filter(function (c) { return isOwnCat(c) || c === DRINGEND; });
     if (!old.length) return;
     var actor = state.me || state.person;
     if (state.demo) {
-      state.categories = state.categories.filter(function (c) { return !STATUS_RE.test(c); });
+      state.categories = state.categories.filter(function (c) { return !isOwnCat(c); });
       state.demoCats[state.itemKey] = state.categories;
       addLog(actor, 'x', '');
       afterSet('x');
@@ -648,13 +624,21 @@
     var mc = Office.context.mailbox.masterCategories;
     if (!mc) { done(); return; }
     mc.getAsync(function (r) {
-      var exists = r.status === Office.AsyncResultStatus.Succeeded &&
-        (r.value || []).some(function (c) { return c.displayName === cat; });
-      if (exists) { done(); return; }
-      var entry = { displayName: cat };
-      var col = presetColor(personKuerzel);
-      if (col) entry.color = col;
-      mc.addAsync([entry], function () { done(); });
+      var have = r.status === Office.AsyncResultStatus.Succeeded ? (r.value || []).map(function (c) { return c.displayName; }) : [];
+      var entries = [];
+      if (have.indexOf(cat) === -1) {
+        var entry = { displayName: cat };
+        var col = presetColor(personKuerzel);
+        if (col) entry.color = col;
+        entries.push(entry);
+      }
+      if (have.indexOf(DRINGEND) === -1) {
+        var d = { displayName: DRINGEND };
+        try { d.color = Office.MailboxEnums.CategoryColor.Preset0; } catch (e) { }
+        entries.push(d);
+      }
+      if (!entries.length) { done(); return; }
+      mc.addAsync(entries, function () { done(); });
     });
   }
 
@@ -663,7 +647,9 @@
     renderKern();
     renderStatus();
     renderLog();
-    if (status === 'x') note('Status entfernt.', 'good');
+    if (status === 'x') note('Zuweisung entfernt.', 'good');
+    else if (status === 'o') note('Status entfernt, der Bearbeiter bleibt.', 'good');
+    else if (status === 'n') note('Zugewiesen an ' + state.person + ' (ohne Status).', 'good');
     else if (status === 'Erledigt') note('Als erledigt markiert. Der Ablage-Flow verschiebt die Mail später in den Ordner "Erledigt".', 'good');
     else note('Status gesetzt: ' + state.person + ' · ' + status, 'good');
     setTimeout(function () { note(''); }, 4000);
@@ -720,7 +706,8 @@
   function buildDemoOverview() {
     var tm = window.TESTMAILS || [];
     var fake = [null, { p: 'THe', s: 'In Bearbeitung' }, { p: 'SRu', s: 'Daten folgen' }, null,
-      { p: 'FSt', s: 'GZD warten' }, { p: 'JRe', s: 'Warten' }, { p: 'THe', s: 'Erledigt' }, { p: 'SRu', s: 'In Bearbeitung' }];
+      { p: 'FSt', s: 'GZD warten' }, { p: 'JRe', s: 'Warten' }, { p: 'THe', s: 'Erledigt' }, { p: 'SRu', s: 'In Bearbeitung' },
+      { p: 'JRe', s: '' }, { p: 'FSt', s: 'Zur Kenntnisnahme' }];
     state.overview.items = tm.map(function (m, i) {
       var an = Auftrag.analyse(m);
       return {
@@ -759,10 +746,10 @@
     var o = state.overview;
     var all = o.items;
     var cMa = countBy(all, function (it) { return it.status ? it.status.p : 'ohne'; });
-    var cSt = countBy(all, function (it) { return it.status ? it.status.s : 'ohne'; });
+    var cSt = countBy(all, function (it) { return it.status && it.status.s ? it.status.s : 'ohne'; });
 
     var maEntries = [{ key: 'alle', label: 'Alle ' + all.length }]
-      .concat(state.team.map(function (k) { return { key: k, label: person(k).name + ' ' + (cMa[k] || 0) }; }))
+      .concat(state.team.map(function (k) { return { key: k, label: k + ' ' + (cMa[k] || 0) }; }))
       .concat([{ key: 'ohne', label: 'Ohne ' + (cMa.ohne || 0) }]);
     chipRow($('overMa'), maEntries, o.ma, function (k) { o.ma = k; renderOverview(); },
       function (k) { return (k === 'alle' || k === 'ohne') ? '' : person(k).farbe; });
@@ -780,7 +767,7 @@
     var list = all.filter(function (it) {
       if (o.ma === 'ohne' && it.status) return false;
       if (o.ma !== 'alle' && o.ma !== 'ohne' && !(it.status && it.status.p === o.ma)) return false;
-      if (o.st === 'ohne' && it.status) return false;
+      if (o.st === 'ohne' && it.status && it.status.s) return false;
       if (o.st !== 'alle' && o.st !== 'ohne' && !(it.status && it.status.s === o.st)) return false;
       if (q) {
         var hay = (it.subject + ' ' + it.from + ' ' + it.kern.was.text + ' ' + it.kern.bisWann.text).toLowerCase();
@@ -824,8 +811,8 @@
       r3.appendChild(el('span', anOk ? 'okk' : 'bad',
         'Anhang: ' + (anOk ? 'ja' : (an === 'folgt' ? 'folgt' : (an === 'teilweise' ? 'teilweise' : 'nein')))));
       if (it.status) {
-        var st = el('span', null, it.status.p + ' · ' + it.status.s);
-        st.style.color = STATUS_FARBE[it.status.s];
+        var st = el('span', null, it.status.s ? it.status.p + ' · ' + it.status.s : it.status.p);
+        st.style.color = it.status.s ? STATUS_FARBE[it.status.s] : person(it.status.p).farbe;
         st.style.fontWeight = '600';
         r3.appendChild(st);
       }
@@ -877,7 +864,6 @@
     $('replyBtn').onclick = writeReply;
     $('copyBtn').onclick = kopieren;
     $('noStatus').onclick = removeStatus;
-    $('notizSave').onclick = saveNotiz;
     $('tabMail').onclick = function () { showTab('mail'); };
     $('tabOver').onclick = function () { showTab('over'); };
     $('detailsInReply').onchange = function () { state.detailsInReply = this.checked; if (state.analysis) renderReply(); };
