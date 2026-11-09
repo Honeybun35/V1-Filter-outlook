@@ -32,6 +32,25 @@
         <div class="krow"><dt>Bis wann</dt><dd id="kWann"></dd></div>
         <div class="krow"><dt>Anhang</dt><dd id="kAnhang"></dd></div>
       </dl>
+      <dl class="kern poly">
+        <div class="krow"><dt>Umfang</dt><dd id="kSeiten"></dd></div>
+        <div class="krow"><dt>Druck</dt><dd id="kDruck"></dd></div>
+        <div class="krow"><dt>Profil</dt><dd id="kProfil"></dd></div>
+        <div class="krow"><dt>Papier</dt><dd id="kPapier"></dd></div>
+      </dl>
+      <div id="kurz" class="kurz" hidden></div>
+    </section>
+
+    <section id="sonderCard" class="card sonder" hidden>
+      <h2>Sonderwünsche</h2>
+      <ul id="sonderList" class="sonderlist"></ul>
+    </section>
+
+    <section class="card">
+      <div class="label">Notiz (nur für uns)</div>
+      <textarea id="notiz" class="notiz" rows="3" placeholder="Eigene Anmerkung zu dieser Mail …"></textarea>
+      <button id="notizSave" class="btn" type="button">Notiz speichern</button>
+      <span id="notizMsg" class="hint"></span>
     </section>
 
     <div id="risks"></div>
@@ -51,10 +70,6 @@
       <div id="gzdHint" class="gzdhint" hidden></div>
     </section>
 
-    <section id="verlaufBox" class="card" hidden>
-      <h2>Mailverlauf <span id="verlaufInfo" class="h2info"></span></h2>
-      <ol id="verlauf" class="verlauf"></ol>
-    </section>
 
     <section id="replyCard" class="card" hidden>
       <button id="replyBtn" class="btn primary" type="button">Rückfrage schreiben</button>

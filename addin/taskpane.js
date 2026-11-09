@@ -58,6 +58,7 @@
     var sel = $('meSelect');
     sel.innerHTML = '<option value="">– bitte wählen –</option>';
     TEAM.forEach(function (t) {
+      if (t.keinePerson) return;
       var o = el('option', null, t.name);
       o.value = t.kuerzel;
       sel.appendChild(o);
@@ -202,12 +203,14 @@
 
   function loadLog(done) {
     state.log = [];
+    state.notiz = '';
     state.props = null;
     if (!state.item || !state.item.loadCustomPropertiesAsync) { done(); return; }
     state.item.loadCustomPropertiesAsync(function (r) {
       if (r.status === Office.AsyncResultStatus.Succeeded) {
         state.props = r.value;
         state.log = parseLog(r.value.get('ac_log'));
+        state.notiz = r.value.get('ac_notiz') || '';
       }
       done();
     });
@@ -239,8 +242,8 @@
   function showEmpty() {
     state.item = null; state.analysis = null;
     $('subject').textContent = 'Keine Mail geöffnet';
-    ['kWas', 'kWann', 'kAnhang', 'ownerLine', 'risks', 'log', 'verlauf', 'checklist'].forEach(function (id) { $(id).innerHTML = ''; });
-    ['eilig', 'logCard', 'verlaufBox', 'replyCard', 'posBox', 'punkteBox'].forEach(function (id) { $(id).hidden = true; });
+    ['kWas', 'kWann', 'kAnhang', 'ownerLine', 'risks', 'log', 'checklist'].forEach(function (id) { $(id).innerHTML = ''; });
+    ['eilig', 'sonderCard', 'kurz', 'logCard', 'replyCard', 'posBox', 'punkteBox'].forEach(function (id) { $(id).hidden = true; });
     $('kernCard').style.borderColor = '';
     renderStatus();
   }
@@ -248,10 +251,12 @@
   function render() {
     if (!state.analysis) { showEmpty(); return; }
     renderKern();
+    renderPoly();
+    renderSonder();
+    renderNotiz();
     renderRisks();
     renderStatus();
     renderLog();
-    renderVerlauf();
     renderReply();
     renderDetails();
   }
@@ -269,7 +274,7 @@
     if (cur) {
       var pe = person(cur.person);
       col = pe.farbe;
-      var n = el('span', null, pe.kuerzel);
+      var n = el('span', null, pe.name);
       n.style.color = pe.farbe;
       line.appendChild(n);
       line.appendChild(document.createTextNode(' · '));
@@ -324,6 +329,71 @@
     }
   }
 
+  // ---------- Druckangaben, Sonderwünsche, Notiz ----------
+  function zeigeListe(id, liste) {
+    var d = $(id);
+    d.innerHTML = '';
+    if (liste && liste.length) d.appendChild(document.createTextNode(liste.slice(0, 3).join(', ')));
+    else d.appendChild(el('span', 'none', 'nicht genannt'));
+  }
+
+  function kurzText(s) {
+    return String(s).replace(/\s*(Seiten|Seiter)\b/i, ' S').replace(/Exemplare?/i, 'Ex').replace(/\s+/g, ' ').trim();
+  }
+
+  function renderPoly() {
+    var a = state.analysis, pg = a.polygraf || {};
+    zeigeListe('kSeiten', pg.seiten);
+    zeigeListe('kDruck', pg.druck);
+    zeigeListe('kProfil', pg.profil);
+    zeigeListe('kPapier', pg.papier);
+
+    // Kurzfassung: nur das Wichtigste in Kurzform
+    var teile = [];
+    var k = a.kern;
+    if (k.was.text) teile.push(kurzText(k.was.text));
+    if (pg.seiten && pg.seiten[0]) teile.push(kurzText(pg.seiten[0]));
+    if (pg.druck && pg.druck[0]) teile.push(kurzText(pg.druck[0]));
+    if (pg.profil && pg.profil[0]) teile.push(kurzText(pg.profil[0]));
+    if (pg.papier && pg.papier[0]) teile.push(kurzText(pg.papier[0]));
+    if (k.bisWann.text) teile.push('bis ' + k.bisWann.text.replace(/^bis\s+/i, ''));
+    var kz = $('kurz');
+    kz.textContent = teile.join(' · ');
+    kz.hidden = !teile.length;
+  }
+
+  function renderSonder() {
+    var s = state.analysis.sonder || [];
+    var card = $('sonderCard'), ul = $('sonderList');
+    ul.innerHTML = '';
+    card.hidden = !s.length;
+    var titel = { format: 'Format', dringend: 'Dringend', zeit: 'Zeit' };
+    s.forEach(function (x) {
+      var li = el('li');
+      li.appendChild(el('mark', null, x.text));
+      li.appendChild(el('span', 'tag', (titel[x.typ] || '') + (x.hinweis && x.typ === 'zeit' ? ' (' + x.hinweis + ')' : x.typ === 'format' ? ' (kein DIN)' : '')));
+      ul.appendChild(li);
+    });
+  }
+
+  function renderNotiz() {
+    $('notiz').value = state.notiz || '';
+    $('notizMsg').textContent = '';
+  }
+
+  function saveNotiz() {
+    if (!state.item) return;
+    state.notiz = $('notiz').value.slice(0, 1500);
+    if (state.demo) { $('notizMsg').textContent = 'Gespeichert (Demo).'; return; }
+    if (!state.props) { $('notizMsg').textContent = 'Konnte nicht gespeichert werden.'; return; }
+    try {
+      state.props.set('ac_notiz', state.notiz);
+      state.props.saveAsync(function (r) {
+        $('notizMsg').textContent = r.status === Office.AsyncResultStatus.Succeeded ? 'Gespeichert.' : 'Konnte nicht gespeichert werden.';
+      });
+    } catch (e) { $('notizMsg').textContent = 'Konnte nicht gespeichert werden.'; }
+  }
+
   function renderRisks() {
     var box = $('risks');
     box.innerHTML = '';
@@ -344,7 +414,7 @@
     peopleBox.innerHTML = '';
     state.team.forEach(function (k) {
       var pe = person(k);
-      var b = el('button', 'chip' + (k === state.person ? ' on' : ''), k);
+      var b = el('button', 'chip' + (k === state.person ? ' on' : ''), pe.name);
       b.type = 'button';
       b.title = pe.name;
       if (k === state.person) { b.style.borderColor = pe.farbe; b.style.color = pe.farbe; }
@@ -806,6 +876,7 @@
     $('replyBtn').onclick = writeReply;
     $('copyBtn').onclick = kopieren;
     $('noStatus').onclick = removeStatus;
+    $('notizSave').onclick = saveNotiz;
     $('tabMail').onclick = function () { showTab('mail'); };
     $('tabOver').onclick = function () { showTab('over'); };
     $('detailsInReply').onchange = function () { state.detailsInReply = this.checked; if (state.analysis) renderReply(); };

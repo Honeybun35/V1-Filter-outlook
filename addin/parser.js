@@ -87,7 +87,7 @@
     return out;
   }
 
-  var MENGE_EINHEIT = 'Stück|Stk\\.?|St\\.|Exemplare?|Ex\\.|Expl\\.?|Ausdrucke?|Drucke?|Plakate?|Poster|Banner|Flyer|Karten|Visitenkarten|Postkarten|Aufkleber|Schilder|Roll-?ups?|Broschüren|Mappen|Sets?|Bögen|Blatt|Kopien|Pläne|Plots?|Folien|fach';
+  var MENGE_EINHEIT = 'Stück|Stk\\.?|St\\.|Exemplare?|Ex\\.?|Expl\\.?|Ausdrucke?|Drucke?|Plakate?|Poster|Banner|Flyer|Karten|Visitenkarten|Postkarten|Aufkleber|Schilder|Roll-?ups?|Broschüren|Mappen|Sets?|Bögen|Blatt|Kopien|Pläne|Plots?|Folien|fach';
 
   // ---------- Muster je Feld ----------
   var PATTERNS = {
@@ -347,7 +347,14 @@
     if (result.daten.folgt) vorschlag = 'Daten folgen';
     else if (/(warte|Rückmeldung|Freigabe|Korrektur)/i.test(full) && missing.length) vorschlag = 'Warten';
 
+
+    // ---------- Angaben für die Polygrafen + Sonderwünsche ----------
+    var polygraf = bauePolygraf(full, result);
+    var sonder = baueSonder(full, result, input.now ? new Date(input.now) : new Date());
+
     var out = {
+      polygraf: polygraf,
+      sonder: sonder,
       fields: result,
       order: FIELDS.map(function (f) { return f.key; }),
       missing: missing,
@@ -359,6 +366,100 @@
       positionen: analysePositionen(full)
     };
     out.kern = baueKern(out, full);
+    return out;
+  }
+
+  // ---------- Polygrafen: Seitenumfang, wie gedruckt, Farbprofil, Papier ----------
+  function bauePolygraf(full, result) {
+    var texte = function (list) { return list.map(function (v) { return v.text; }); };
+    var seiten = collect(full, [
+      /(?:Seitenumfang|Umfang)\s*[:=]?\s*\d{1,4}(?:\s?(?:Seiten|S\.?))?/gi,
+      /(?<![\d.,])\d{1,4}\s?(?:Seiten|Seiter|S\.)(?![A-Za-zÄÖÜäöüß0-9_])/gi,
+      /(?<![\d.,])\d{1,4}[\s-]?seitig(?![A-Za-zÄÖÜäöüß0-9_])/gi
+    ]);
+    var druck = collect(full, [
+      /(?<![\d./])(?:4\/[014]|1\/[01]|5\/[05]|6\/[06]|0\/[14]|4\+[04]|1\+[01])(?![\d/])/g,
+      wb('einseitig(?:\\s+bedruckt)?|beidseitig(?:\\s+bedruckt)?|doppelseitig|Duplex|Simplex|Vorder-?\\s?und\\s+Rückseite|Schön-?\\s?und\\s+Widerdruck|s\\/w|schwarz[\\s-]?wei(?:ß|ss)|Graustufen|einfarbig|vierfarbig|4-?farbig|farbig|in Farbe|Farbdruck', 'gi')
+    ]);
+    var profil = collect(full, [
+      wb('ISO[\\s-]?Coated(?:[\\s-]?v2)?(?:[\\s-]?300)?|PSO[\\s-]?(?:Coated|Uncoated|LWC)[\\w\\s-]{0,12}?|FOGRA\\s?\\d{2}[a-z]?|ECI[\\s-]?RGB(?:\\s?v2)?|sRGB|Adobe[\\s-]?RGB|ICC[\\s-]?Profile?n?|Farbprofile?n?|Euroskala|Pantone|HKS|CMYK|RGB', 'gi')
+    ]);
+    return {
+      seiten: texte(seiten),
+      druck: texte(druck),
+      profil: texte(profil),
+      papier: texte(result.papier.values)
+    };
+  }
+
+  // ---------- Sonderwünsche: kein DIN-Format, dringend, Zeitangaben für heute/morgen ----------
+  var DIN_MM = [[841,1189],[594,841],[420,594],[297,420],[210,297],[148,210],[105,148],[74,105],
+                [1000,1414],[707,1000],[500,707],[353,500],[250,353],[176,250],
+                [1030,1456],[728,1030],[515,728],[364,515],[257,364],[182,257],
+                [99,210],[110,220],[324,458],[229,324],[162,229],[114,162],[85,55],[55,85]];
+  function mm(zahl, einheit) {
+    var n = parseFloat(String(zahl).replace(',', '.'));
+    einheit = (einheit || '').toLowerCase();
+    if (einheit === 'cm') return n * 10;
+    if (einheit === 'm') return n * 1000;
+    return n;
+  }
+  function istDin(a, b) {
+    return DIN_MM.some(function (d) {
+      return (Math.abs(d[0] - a) <= 1 && Math.abs(d[1] - b) <= 1) || (Math.abs(d[0] - b) <= 1 && Math.abs(d[1] - a) <= 1);
+    });
+  }
+
+  function baueSonder(full, result, jetzt) {
+    var out = [];
+    var seen = {};
+    function add(typ, text, hinweis) {
+      var k = typ + '|' + text.toLowerCase();
+      if (seen[k]) return;
+      seen[k] = true;
+      out.push({ typ: typ, text: text, hinweis: hinweis || '' });
+    }
+
+    // 1) Kein DIN-Format (Maße, die keine Normgröße sind, oder ausdrücklich "Sonderformat")
+    var re = /(?<![\d.,])(\d{2,4}(?:[.,]\d+)?)\s?(mm|cm|m)?\s?[x×*]\s?(\d{2,4}(?:[.,]\d+)?)\s?(mm|cm|m)(?![A-Za-z])/gi;
+    var m;
+    while ((m = re.exec(full)) !== null) {
+      var einheit = m[4];
+      var a = mm(m[1], m[2] || einheit), b = mm(m[3], einheit);
+      if (!istDin(a, b)) add('format', m[0].replace(/\s+/g, ' ').trim(), 'kein DIN-Format');
+    }
+    collect(full, [wb('Sonderformat|Sonderma(?:ß|ss)e?|Sondergr(?:ö|oe)(?:ß|ss)e|freies Format|kein(?:e)? DIN(?:[\\s-]*Format)?|nicht DIN|individuelles Format|Wunschformat', 'gi')])
+      .forEach(function (v) { add('format', v.text, 'kein DIN-Format'); });
+
+    // 2) Dringend
+    collect(full, [wb('dringend|eilig|ASAP|asap|sofort|schnellstmöglich|so schnell wie möglich|Express|heute noch|rush|Eilauftrag|eilt', 'gi')])
+      .forEach(function (v) { add('dringend', v.text, 'dringend'); });
+
+    // 3) Zeitangaben, die HEUTE oder MORGEN gelten
+    var p2 = function (x) { return ('0' + x).slice(-2); };
+    var morgen = new Date(jetzt.getFullYear(), jetzt.getMonth(), jetzt.getDate() + 1);
+    var heuteD = p2(jetzt.getDate()) + '.' + p2(jetzt.getMonth() + 1) + '.';
+    var morgenD = p2(morgen.getDate()) + '.' + p2(morgen.getMonth() + 1) + '.';
+    var tage = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+    var wtHeute = tage[jetzt.getDay()], wtMorgen = tage[morgen.getDay()];
+
+    collect(full, [wb('(?:bis\\s+|am\\s+|für\\s+|vor\\s+)?heute(?:\\s+noch)?(?:\\s+(?:bis\\s+)?\\d{1,2}(?:[:.]\\d{2})?\\s?Uhr)?|(?:bis\\s+|am\\s+|für\\s+|vor\\s+)?morgen(?:\\s+(?:früh|Vormittag|Mittag|Nachmittag|Abend))?(?:\\s+(?:bis\\s+)?\\d{1,2}(?:[:.]\\d{2})?\\s?Uhr)?', 'gi')])
+      .forEach(function (v) {
+        var low = v.text.toLowerCase();
+        add('zeit', v.text, /morgen/.test(low) ? 'morgen' : 'heute');
+      });
+    collect(full, [/(?<![\d.])(?:0?[1-9]|[12]\d|3[01])\.\s?(?:0?[1-9]|1[0-2])\.(?:\s?(?:20)?\d{2})?(?![\d])/g])
+      .forEach(function (v) {
+        var d = v.text.replace(/\s+/g, '').replace(/\.(?:20)?\d{2}$/, '.').replace(/^0?(\d)\./, '0$1.').replace(/\.0?(\d)\.$/, '.0$1.');
+        if (d.indexOf(heuteD) === 0) add('zeit', v.text, 'heute');
+        else if (d.indexOf(morgenD) === 0) add('zeit', v.text, 'morgen');
+      });
+    var wtRe = new RegExp(WORD_L + '(?:bis\\s+|am\\s+|für\\s+|vor\\s+|spätestens\\s+)?(' + wtHeute + '|' + wtMorgen + ')' + WORD_R, 'gi');
+    collect(full, [wtRe]).forEach(function (v) {
+      var low = v.text.toLowerCase();
+      add('zeit', v.text, low.indexOf(wtHeute.toLowerCase()) !== -1 ? 'heute' : 'morgen');
+    });
+
     return out;
   }
 

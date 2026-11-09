@@ -4,7 +4,7 @@
 
 var GZD_TEXT = /(gut\s+zum\s+druck|\bgzd\b|g\.\s?z\.\s?d\.|druckfreigabe|korrekturabzug)/i;
 var GZD_DATEI = /(gzd|gut[\s_\-]?zum[\s_\-]?druck|korrektur|freigabe)/i;
-var TEAM_PRESET = { SRu: 8, THe: 7, FSt: 4, JRe: 1 };
+var TEAM_PRESET = { SRu: 1, THe: 7, FSt: 4, JRe: 8, VHa: 12, Offen: 13 };
 
 function onMessageSendHandler(event) {
   try {

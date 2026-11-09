@@ -131,3 +131,14 @@ h3 { margin: 10px 0 4px; font-size: 11px; font-weight: 600; text-transform: uppe
 .settings select { width: 100%; padding: 6px; margin: 4px 0 6px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
 .demo { background: var(--soft); border-bottom: 1px dashed var(--line); padding: 8px 10px; }
 .demo select, .demo textarea { width: 100%; margin: 6px 0; font: inherit; }
+
+/* Druckangaben, Sonderwünsche, Notiz */
+.kern.poly { margin-top: 6px; padding-top: 6px; border-top: 1px dashed #d1d5db; }
+.kern .none { color: #9ca3af; }
+.kurz { margin-top: 8px; padding: 6px 8px; background: #f3f4f6; border-radius: 6px; font-size: 12px; font-weight: 600; }
+.sonder { background: #fff8c5; border-color: #e6c200; }
+.sonderlist { list-style: none; margin: 4px 0 0; padding: 0; }
+.sonderlist li { padding: 3px 0; }
+.sonderlist mark { background: #ffe14d; padding: 0 3px; border-radius: 3px; font-weight: 700; }
+.sonderlist .tag { margin-left: 6px; font-size: 11px; color: #7a5d00; }
+.notiz { width: 100%; box-sizing: border-box; font: inherit; margin: 4px 0; }
