@@ -24,12 +24,42 @@
 
   <!-- ===== Diese Mail ===== -->
   <main id="viewMail">
+    <!-- 1. Bearbeiter und Status -->
     <section id="kernCard" class="card owner-frame">
-      <div class="ownerline"><span id="ownerLine"></span><span id="eilig" class="eilig" hidden>Eilig</span></div>
+      <div class="ownerline"><span id="ownerLine"></span><span id="eilig" class="eilig" hidden>Priorität</span></div>
       <h1 id="subject" class="subject">Keine Mail geöffnet</h1>
+      <div class="label">Bearbeiter</div>
+      <div id="people" class="chips"></div>
+      <div class="label">Status</div>
+      <div id="statuses" class="statuses"></div>
+      <div class="statusfoot">
+        <button id="prioBtn" class="chip prio" type="button">Priorität</button>
+        <button id="noStatus" class="link" type="button">Kein Status</button>
+      </div>
+      <div id="note" class="note" hidden></div>
+    </section>
+
+    <!-- 2. Warnungen (z. B. Anhang nicht vorhanden) -->
+    <div id="risks"></div>
+
+    <!-- 3. Das Wichtigste: Was und bis wann -->
+    <section class="card">
       <dl class="kern">
         <div class="krow"><dt>Was</dt><dd id="kWas"></dd></div>
         <div class="krow"><dt>Bis wann</dt><dd id="kWann"></dd></div>
+      </dl>
+    </section>
+
+    <section id="sonderCard" class="card sonder" hidden>
+      <h2>Sonderwünsche</h2>
+      <ul id="sonderList" class="sonderlist"></ul>
+    </section>
+
+    <!-- 4. Alles Weitere zum Aufklappen -->
+    <details id="mehr" class="card details">
+      <summary>Mehr Infos <span id="counter" class="h2info"></span></summary>
+
+      <dl class="kern">
         <div class="krow"><dt>Anhang</dt><dd id="kAnhang"></dd></div>
       </dl>
       <dl class="kern poly">
@@ -39,48 +69,22 @@
         <div class="krow"><dt>Papier</dt><dd id="kPapier"></dd></div>
       </dl>
       <div id="kurz" class="kurz" hidden></div>
-    </section>
 
-    <section id="sonderCard" class="card sonder" hidden>
-      <h2>Sonderwünsche</h2>
-      <ul id="sonderList" class="sonderlist"></ul>
-    </section>
-
-    <section class="card">
       <div class="label">Notiz (nur für uns)</div>
       <textarea id="notiz" class="notiz" rows="3" placeholder="Eigene Anmerkung zu dieser Mail …"></textarea>
       <button id="notizSave" class="btn" type="button">Notiz speichern</button>
       <span id="notizMsg" class="hint"></span>
-    </section>
 
-    <div id="risks"></div>
+      <div id="replyCard" hidden>
+        <h3>Rückfrage</h3>
+        <button id="replyBtn" class="btn primary" type="button">Rückfrage schreiben</button>
+        <div class="hint">Öffnet einen Entwurf an den Absender. Es wird nichts automatisch gesendet.
+          <button id="copyBtn" class="link" type="button">Text stattdessen kopieren</button></div>
+        <label class="check"><input id="detailsInReply" type="checkbox"> auch Details (Papier, Farbe, Lieferung …) abfragen</label>
+        <div id="copyBox" hidden><textarea id="copyText" rows="8"></textarea></div>
+      </div>
 
-    <section class="card">
-      <div class="label">Bearbeiter</div>
-      <div id="people" class="chips"></div>
-      <div class="label">Status</div>
-      <div id="statuses" class="statuses"></div>
-      <button id="noStatus" class="link" type="button">Kein Status</button>
-      <div id="note" class="note" hidden></div>
-    </section>
-
-    <section id="logCard" class="card" hidden>
-      <h2>Aktivität</h2>
-      <ul id="log" class="log"></ul>
-      <div id="gzdHint" class="gzdhint" hidden></div>
-    </section>
-
-
-    <section id="replyCard" class="card" hidden>
-      <button id="replyBtn" class="btn primary" type="button">Rückfrage schreiben</button>
-      <div class="hint">Öffnet einen Entwurf an den Absender. Es wird nichts automatisch gesendet.
-        <button id="copyBtn" class="link" type="button">Text stattdessen kopieren</button></div>
-      <label class="check"><input id="detailsInReply" type="checkbox"> auch Details (Papier, Farbe, Lieferung …) abfragen</label>
-      <div id="copyBox" hidden><textarea id="copyText" rows="8"></textarea></div>
-    </section>
-
-    <details class="card details">
-      <summary>Details <span id="counter" class="h2info"></span></summary>
+      <h3>Prüfliste</h3>
       <ul id="checklist" class="checklist"></ul>
       <div id="posBox" hidden>
         <h3>Positionen <span id="posCount" class="h2info"></span></h3>
@@ -89,6 +93,12 @@
       <div id="punkteBox" hidden>
         <h3>Wichtige Stellen</h3>
         <ul id="punkte" class="punkte"></ul>
+      </div>
+
+      <div id="logCard" hidden>
+        <h3>Aktivität</h3>
+        <ul id="log" class="log"></ul>
+        <div id="gzdHint" class="gzdhint" hidden></div>
       </div>
     </details>
   </main>

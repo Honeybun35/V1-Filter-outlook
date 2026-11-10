@@ -31,24 +31,31 @@ function onMessageSendHandler(event) {
 }
 
 function kategorieSetzen(item, done) {
+  // Getrennte Kategorien: Status "Warten GzD" + Name der Person (aus team.js, falls geladen)
   var me = '';
   try { me = Office.context.roamingSettings.get('me') || ''; } catch (e) { }
-  var cat = (me ? me + ' · ' : '') + '4 GZD warten';
+  var cats = ['Warten GzD'];
+  var team = (typeof window !== 'undefined' && window.TEAM) || [];
+  var pe = team.filter(function (t) { return t.kuerzel === me && !t.keinePerson; })[0];
+  if (pe) cats.unshift(pe.kategorie || pe.kuerzel);
   var mc = Office.context.mailbox.masterCategories;
   var add = function () {
-    item.categories.addAsync([cat], function () { done(); });
+    item.categories.addAsync(cats, function () { done(); });
   };
   if (!mc) { add(); return; }
   mc.getAsync(function (r) {
-    var exists = r.status === Office.AsyncResultStatus.Succeeded &&
-      (r.value || []).some(function (c) { return c.displayName === cat; });
-    if (exists) { add(); return; }
-    var entry = { displayName: cat };
-    try {
-      var p = TEAM_PRESET[me];
-      if (p !== undefined) entry.color = Office.MailboxEnums.CategoryColor['Preset' + p];
-    } catch (e) { }
-    mc.addAsync([entry], function () { add(); });
+    var have = r.status === Office.AsyncResultStatus.Succeeded
+      ? (r.value || []).map(function (c) { return c.displayName.toLowerCase(); }) : [];
+    var neu = cats.filter(function (c) { return have.indexOf(c.toLowerCase()) === -1; }).map(function (c) {
+      var entry = { displayName: c };
+      try {
+        var p = (pe && c === (pe.kategorie || pe.kuerzel)) ? pe.preset : TEAM_PRESET[me];
+        if (p !== undefined && c !== 'Warten GzD') entry.color = Office.MailboxEnums.CategoryColor['Preset' + p];
+      } catch (e) { }
+      return entry;
+    });
+    if (!neu.length) { add(); return; }
+    mc.addAsync(neu, function () { add(); });
   });
 }
 

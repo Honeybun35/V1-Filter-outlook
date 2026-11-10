@@ -1,24 +1,23 @@
 /* Seitenleiste "Auftrags-Check" für Outlook (Office.js, Mailbox 1.8)
- * Reiter 1 "Diese Mail": Kernaussage (Was / Bis wann / Anhang), Bearbeiter + Status, Aktivität, Verlauf
+ * Reiter 1 "Diese Mail": Bearbeiter + Status, Warnungen, Was / Bis wann, Rest unter "Mehr Infos"
  * Reiter 2 "Übersicht": alle Mails mit Filter nach MA und Status (Datenquelle: später Microsoft Graph) */
 (function () {
   'use strict';
 
-  // Ein Status ist freiwillig: Nur der Name (Kürzel) als Kategorie ist erlaubt = "ohne Status"
-  var STATUS = ['Warten', 'Daten folgen', 'In Bearbeitung', 'GZD warten', 'Zur Ansicht', 'Zur Kenntnisnahme', 'Erledigt'];
-  // Schriftfarbe je Status (Akzent, sonst ist alles weiß)
+  // Status = eigene Kategorie in Outlook (genau dieser Name). Der Bearbeiter ist eine zweite Kategorie.
+  var STATUS = ['Warten Kunde', 'Warten LT', 'Warten GzD', 'GzD erstellen', 'in Bearbeitung :)', 'zu erledigen', 'Info', 'Erledigt'];
+  // Schriftfarbe je Status in der Seitenleiste
   var STATUS_FARBE = {
-    'Warten': '#b7791f', 'Daten folgen': '#c05621', 'In Bearbeitung': '#2b6cb0',
-    'GZD warten': '#6b46c1', 'Zur Ansicht': '#4a5568', 'Zur Kenntnisnahme': '#718096', 'Erledigt': '#2f855a'
+    'Warten Kunde': '#b7791f', 'Warten LT': '#c05621', 'Warten GzD': '#6b46c1', 'GzD erstellen': '#4a5568',
+    'in Bearbeitung :)': '#2b6cb0', 'zu erledigen': '#975a16', 'Info': '#0f766e', 'Erledigt': '#2f855a'
   };
-  var SEP = ' · ';
-  // Kategorie-Name mit Ziffer, damit Outlook nach Person und dann in fester Status-Reihenfolge sortiert:
-  // "THe · 3 In Bearbeitung". Die alte Schreibweise ohne Ziffer wird weiter erkannt.
-  var STATUS_RE = new RegExp('^(.+?)' + SEP.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?:\\d )?(' + STATUS.join('|') + ')$');
-  var DRINGEND = '!! Dringend';
-  function catName(p, status) {
-    return status ? p + SEP + (STATUS.indexOf(status) + 1) + ' ' + status : p;
-  }
+  // Alte Kategorien: werden noch erkannt und beim nächsten Setzen durch die neuen ersetzt
+  var ALT_STATUS = ['warten', 'GzD warten', 'Daten folgen', 'In Bearbeitung', 'Zur Ansicht', 'Zur Kenntnisnahme'];
+  var ALT_LOG = ['Warten', 'Daten folgen', 'In Bearbeitung', 'GZD warten', 'Zur Ansicht', 'Zur Kenntnisnahme', 'Erledigt'];
+  var PRIO = 'Priorität';
+  var ALT_DRINGEND = '!! Dringend';
+  // Vorschlag aus dem Mailtext -> neuer Status
+  var VORSCHLAG = { 'Daten folgen': 'Warten Kunde', 'Warten': 'Warten Kunde' };
   var TEAM = window.TEAM || [];
   var CORE = ['menge', 'format', 'termin', 'daten']; // Was (Menge, Format), Bis wann, Anhang
 
@@ -27,9 +26,46 @@
     return { kuerzel: k, name: k, farbe: '#6b7280', preset: 12 };
   }
 
-  // Gehört die Kategorie zu uns? ("THe · Warten" oder nur "THe")
+  function lc(s) { return String(s || '').toLowerCase(); }
+
+  // Ist die Kategorie ein Status? Gibt den Status-Namen zurück (neu oder alt), sonst ''.
+  function statusVon(c) {
+    var i;
+    for (i = 0; i < STATUS.length; i++) if (lc(STATUS[i]) === lc(c)) return STATUS[i];
+    for (i = 0; i < ALT_STATUS.length; i++) if (lc(ALT_STATUS[i]) === lc(c)) return c;
+    return '';
+  }
+
+  // Ist die Kategorie ein Bearbeiter? Gibt das Kürzel zurück, sonst ''.
+  function personVonKat(c) {
+    for (var i = 0; i < TEAM.length; i++) {
+      var t = TEAM[i];
+      if (t.keinePerson) continue;
+      if ((t.kategorie && lc(t.kategorie) === lc(c)) || t.kuerzel === c) return t.kuerzel;
+    }
+    return '';
+  }
+
+  // Alte Schreibweise "SRu · 3 In Bearbeitung"
+  function kombi(c) {
+    var m = /^(.+?) · (?:\d )?(.+)$/.exec(c);
+    if (!m) return null;
+    var p = personVonKat(m[1]) || (m[1] === 'Offen' ? 'Offen' : '');
+    var s = m[2] === 'GZD warten' ? 'GZD warten' : statusVon(m[2]) || (ALT_LOG.indexOf(m[2]) !== -1 ? m[2] : '');
+    return (p && s) ? { person: p, status: s } : null;
+  }
+
   function isOwnCat(c) {
-    return STATUS_RE.exec(c) !== null || TEAM.some(function (t) { return t.kuerzel === c; });
+    return !!(statusVon(c) || personVonKat(c) || kombi(c) || c === 'Offen');
+  }
+
+  function personCat(k) {
+    var p = person(k);
+    return p.keinePerson ? '' : (p.kategorie || p.kuerzel);
+  }
+
+  function hatPrio() {
+    return state.categories.some(function (c) { return lc(c) === lc(PRIO); });
   }
 
   var state = {
@@ -179,16 +215,16 @@
   }
 
   function currentStatus() {
+    var pers = '', st = '';
     for (var i = 0; i < state.categories.length; i++) {
-      var m = STATUS_RE.exec(state.categories[i]);
-      if (m) return { person: m[1], status: m[2] };
+      var c = state.categories[i];
+      var k = kombi(c);
+      if (k) return k;
+      if (!pers) pers = personVonKat(c);
+      if (!st) st = statusVon(c);
     }
-    // Nur der Name, ohne Status
-    for (var j = 0; j < state.categories.length; j++) {
-      var c = state.categories[j];
-      if (TEAM.some(function (t) { return t.kuerzel === c; })) return { person: c, status: '' };
-    }
-    return null;
+    if (!pers && !st) return null;
+    return { person: pers || 'Offen', status: st };
   }
 
   function syncPersonFromCategories() {
@@ -203,18 +239,19 @@
 
   // ---------- Aktivität (wer hat wann was gesetzt) ----------
   // Gespeichert als eigene Eigenschaft an der Mail, damit alle im gemeinsamen Postfach es sehen.
-  // Format je Eintrag: Akteur|Status-Nr (oder x)|Minuten seit 1970|Bearbeiter
+  // Format je Eintrag: Akteur|Status-Name (oder x/n/o; alte Einträge: Nummer)|Minuten seit 1970|Bearbeiter
   function parseLog(raw) {
     return String(raw || '').split(';').filter(Boolean).map(function (p) {
       var a = p.split('|');
-      var s = (a[1] === 'x' || a[1] === 'n' || a[1] === 'o') ? a[1] : STATUS[parseInt(a[1], 10)];
+      var s = (a[1] === 'x' || a[1] === 'n' || a[1] === 'o') ? a[1]
+        : (/^\d+$/.test(a[1]) ? ALT_LOG[parseInt(a[1], 10)] : a[1]);
       return { p: a[0], s: s, t: parseInt(a[2], 10) * 60000, a: a[3] || '' };
     }).filter(function (e) { return e.s && !isNaN(e.t); });
   }
 
   function serializeLog(list) {
     return list.map(function (e) {
-      var code = (e.s === 'x' || e.s === 'n' || e.s === 'o') ? e.s : STATUS.indexOf(e.s);
+      var code = e.s;
       return [e.p, code, Math.floor(e.t / 60000), e.a || ''].join('|');
     }).join(';');
   }
@@ -282,7 +319,7 @@
   function renderKern() {
     var a = state.analysis, k = a.kern;
     $('subject').textContent = state.subject || '(ohne Betreff)';
-    $('eilig').hidden = !k.bisWann.eilig;
+    $('eilig').hidden = !hatPrio();
 
     // Bearbeiter-Zeile und Rahmen in der Farbe der Person
     var cur = currentStatus();
@@ -298,7 +335,7 @@
       if (cur.status) {
         line.appendChild(document.createTextNode(' · '));
         var s = el('span', null, cur.status);
-        s.style.color = STATUS_FARBE[cur.status];
+        s.style.color = STATUS_FARBE[cur.status] || '#4a5568';
         line.appendChild(s);
       }
     } else {
@@ -451,6 +488,7 @@
 
     var cur = currentStatus();
     var suggest = state.analysis && state.analysis.vorschlag;
+    suggest = VORSCHLAG[suggest] || suggest;
     var box = $('statuses');
     box.innerHTML = '';
     STATUS.forEach(function (s) {
@@ -462,6 +500,9 @@
       b.onclick = function () { setStatus(s); };
       box.appendChild(b);
     });
+    var pb = $('prioBtn');
+    pb.className = 'chip prio' + (hatPrio() ? ' on' : '');
+    pb.title = hatPrio() ? 'Priorität entfernen' : 'Als Priorität markieren';
     $('noStatus').hidden = !cur;
     $('noStatus').textContent = cur && !cur.status ? 'Zuweisung entfernen' : 'Kein Status';
   }
@@ -473,7 +514,7 @@
     card.hidden = false;
     state.log.slice(0, 6).forEach(function (e) {
       var li = el('li');
-      var n = el('b', null, e.p);
+      var n = el('b', null, e.p ? person(e.p).name : '?');
       n.style.color = person(e.p).farbe;
       li.appendChild(n);
       if (e.s === 'x') {
@@ -485,7 +526,7 @@
       } else {
         li.appendChild(document.createTextNode(' hat auf '));
         var s = el('b', null, e.s);
-        s.style.color = STATUS_FARBE[e.s];
+        s.style.color = STATUS_FARBE[e.s] || '#4a5568';
         li.appendChild(s);
         li.appendChild(document.createTextNode(' gesetzt' + (e.a && e.a !== e.p ? ' (Bearbeiter ' + e.a + ')' : '')));
       }
@@ -496,9 +537,9 @@
     // Erinnerung: GZD wartet seit 48 Stunden
     var hint = $('gzdHint');
     var cur = currentStatus();
-    var last = state.log.filter(function (e) { return e.s === 'GZD warten'; })[0];
+    var last = state.log.filter(function (e) { return e.s === 'Warten GzD' || e.s === 'GZD warten'; })[0];
     var std = last ? Math.floor((Date.now() - last.t) / 3600000) : 0;
-    if (cur && cur.status === 'GZD warten' && last && std >= 48) {
+    if (cur && cur.status === 'Warten GzD' && last && std >= 48) {
       hint.hidden = false;
       hint.textContent = '⏰ GZD wartet seit ' + std + ' Std. Antwort vom Kunden prüfen.';
     } else {
@@ -627,31 +668,39 @@
   }
 
   // status = '' bedeutet: nur der Name (Bearbeiter), kein Status
+  // Gesetzt werden zwei getrennte Kategorien: Name (z. B. "Simone Ruppli") und Status (z. B. "Warten Kunde").
   function setStatus(status, logCode) {
     if (!state.item) return;
     var p = state.person || state.me || state.team[0];
     var actor = state.me || p;
-    var cat = catName(p, status);
+    var neu = [];
+    if (personCat(p)) neu.push(personCat(p));
+    if (status) neu.push(status);
+    if (!neu.length) { removeAll(); return; }
     var urgent = !!(state.analysis && state.analysis.kern && state.analysis.kern.bisWann.eilig);
-    var wantUrgent = urgent && status !== 'Erledigt';
+    var erledigt = status === 'Erledigt';
     var code = status || logCode || 'n';
 
+    var weg = state.categories.filter(function (c) {
+      return (isOwnCat(c) && neu.indexOf(c) === -1) || c === ALT_DRINGEND || (erledigt && lc(c) === lc(PRIO));
+    });
+    // Eilige Mail: "Priorität" nur beim ersten Zuweisen automatisch dazu (bei "Erledigt" wieder weg).
+    // Wurde sie von Hand entfernt, kommt sie nicht wieder.
+    if (urgent && !erledigt && !currentStatus() && !hatPrio()) neu.push(PRIO);
+    var dazu = neu.filter(function (c) { return state.categories.indexOf(c) === -1; });
+
     if (state.demo) {
-      state.categories = state.categories.filter(function (c) { return !isOwnCat(c); }).concat([cat]);
+      state.categories = state.categories.filter(function (c) { return weg.indexOf(c) === -1; }).concat(dazu);
       state.demoCats[state.itemKey] = state.categories;
       addLog(actor, code, p);
       afterSet(code);
       return;
     }
 
-    ensureMaster(cat, p, function () {
-      var old = state.categories.filter(function (c) { return isOwnCat(c) && c !== cat; });
-      // "!! Dringend" bei eiligen Mails dazu, bei "Erledigt" wieder weg
-      if (!wantUrgent && state.categories.indexOf(DRINGEND) !== -1) old.push(DRINGEND);
-      var neu = [cat];
-      if (wantUrgent && state.categories.indexOf(DRINGEND) === -1) neu.push(DRINGEND);
+    ensureMaster(dazu, p, function () {
       var add = function () {
-        state.item.categories.addAsync(neu, function (r) {
+        if (!dazu.length) { addLog(actor, code, p); readCategories(function () { afterSet(code); }); return; }
+        state.item.categories.addAsync(dazu, function (r) {
           if (r.status !== Office.AsyncResultStatus.Succeeded) {
             note('Konnte Kategorie nicht setzen: ' + (r.error && r.error.message), 'err');
             return;
@@ -660,26 +709,46 @@
           readCategories(function () { afterSet(code); });
         });
       };
-      if (old.length) state.item.categories.removeAsync(old, function () { add(); });
+      if (weg.length) state.item.categories.removeAsync(weg, function () { add(); });
       else add();
     });
+  }
+
+  // Priorität von Hand an/aus
+  function togglePrio() {
+    if (!state.item) return;
+    var an = !hatPrio();
+    var fertig = function () { readCategories(function () { renderKern(); renderStatus(); }); };
+    if (state.demo) {
+      state.categories = an ? state.categories.concat([PRIO])
+        : state.categories.filter(function (c) { return lc(c) !== lc(PRIO); });
+      state.demoCats[state.itemKey] = state.categories;
+      renderKern(); renderStatus();
+      return;
+    }
+    if (an) {
+      ensureMaster([PRIO], '', function () { state.item.categories.addAsync([PRIO], fertig); });
+    } else {
+      var alt = state.categories.filter(function (c) { return lc(c) === lc(PRIO); });
+      state.item.categories.removeAsync(alt, fertig);
+    }
   }
 
   // 1. Klick: Status entfernen, Name bleibt. Danach: auch den Namen entfernen.
   function removeStatus() {
     var cur = currentStatus();
     if (!cur || !state.item) return;
-    if (cur.status) setStatus('', 'o');
+    if (cur.status && !person(cur.person).keinePerson) setStatus('', 'o');
     else removeAll();
   }
 
   function removeAll() {
     if (!state.item) return;
-    var old = state.categories.filter(function (c) { return isOwnCat(c) || c === DRINGEND; });
+    var old = state.categories.filter(function (c) { return isOwnCat(c) || c === ALT_DRINGEND; });
     if (!old.length) return;
     var actor = state.me || state.person;
     if (state.demo) {
-      state.categories = state.categories.filter(function (c) { return !isOwnCat(c); });
+      state.categories = state.categories.filter(function (c) { return old.indexOf(c) === -1; });
       state.demoCats[state.itemKey] = state.categories;
       addLog(actor, 'x', '');
       afterSet('x');
@@ -691,23 +760,21 @@
     });
   }
 
-  function ensureMaster(cat, personKuerzel, done) {
+  // Fehlende Kategorien in der Kategorienliste von Outlook anlegen
+  function ensureMaster(namen, personKuerzel, done) {
     var mc = Office.context.mailbox.masterCategories;
-    if (!mc) { done(); return; }
+    if (!mc || !namen.length) { done(); return; }
     mc.getAsync(function (r) {
-      var have = r.status === Office.AsyncResultStatus.Succeeded ? (r.value || []).map(function (c) { return c.displayName; }) : [];
-      var entries = [];
-      if (have.indexOf(cat) === -1) {
-        var entry = { displayName: cat };
-        var col = presetColor(personKuerzel);
+      var have = r.status === Office.AsyncResultStatus.Succeeded
+        ? (r.value || []).map(function (c) { return lc(c.displayName); }) : [];
+      var entries = namen.filter(function (n) { return have.indexOf(lc(n)) === -1; }).map(function (n) {
+        var entry = { displayName: n };
+        var col;
+        if (lc(n) === lc(PRIO)) { try { col = Office.MailboxEnums.CategoryColor.Preset0; } catch (e) { } }
+        else if (personKuerzel && n === personCat(personKuerzel)) col = presetColor(personKuerzel);
         if (col) entry.color = col;
-        entries.push(entry);
-      }
-      if (have.indexOf(DRINGEND) === -1) {
-        var d = { displayName: DRINGEND };
-        try { d.color = Office.MailboxEnums.CategoryColor.Preset0; } catch (e) { }
-        entries.push(d);
-      }
+        return entry;
+      });
       if (!entries.length) { done(); return; }
       mc.addAsync(entries, function () { done(); });
     });
@@ -720,9 +787,9 @@
     renderLog();
     if (status === 'x') note('Zuweisung entfernt.', 'good');
     else if (status === 'o') note('Status entfernt, der Bearbeiter bleibt.', 'good');
-    else if (status === 'n') note('Zugewiesen an ' + state.person + ' (ohne Status).', 'good');
+    else if (status === 'n') note('Zugewiesen an ' + person(state.person).name + ' (ohne Status).', 'good');
     else if (status === 'Erledigt') note('Als erledigt markiert. Der Ablage-Flow verschiebt die Mail später in den Ordner "Erledigt".', 'good');
-    else note('Status gesetzt: ' + state.person + ' · ' + status, 'good');
+    else note('Status gesetzt: ' + person(state.person).name + ' · ' + status, 'good');
     setTimeout(function () { note(''); }, 4000);
   }
 
@@ -776,9 +843,9 @@
   // (noch nicht eingerichtet), dort erscheint ein Hinweis.
   function buildDemoOverview() {
     var tm = window.TESTMAILS || [];
-    var fake = [null, { p: 'THe', s: 'In Bearbeitung' }, { p: 'SRu', s: 'Daten folgen' }, null,
-      { p: 'FSt', s: 'GZD warten' }, { p: 'JRe', s: 'Warten' }, { p: 'THe', s: 'Erledigt' }, { p: 'SRu', s: 'In Bearbeitung' },
-      { p: 'JRe', s: '' }, { p: 'FSt', s: 'Zur Kenntnisnahme' }];
+    var fake = [null, { p: 'THe', s: 'in Bearbeitung :)' }, { p: 'SRu', s: 'Warten Kunde' }, null,
+      { p: 'FSt', s: 'Warten GzD' }, { p: 'JRe', s: 'Warten LT' }, { p: 'THe', s: 'Erledigt' }, { p: 'SRu', s: 'GzD erstellen' },
+      { p: 'JRe', s: '' }, { p: 'VHa', s: 'zu erledigen' }];
     state.overview.items = tm.map(function (m, i) {
       var an = Auftrag.analyse(m);
       return {
@@ -935,6 +1002,7 @@
     $('replyBtn').onclick = writeReply;
     $('copyBtn').onclick = kopieren;
     $('noStatus').onclick = removeStatus;
+    $('prioBtn').onclick = togglePrio;
     $('notizSave').onclick = saveNotiz;
     $('tabMail').onclick = function () { showTab('mail'); };
     $('tabOver').onclick = function () { showTab('over'); };

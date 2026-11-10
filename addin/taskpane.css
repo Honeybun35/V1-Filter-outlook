@@ -145,3 +145,10 @@ h3 { margin: 10px 0 4px; font-size: 11px; font-weight: 600; text-transform: uppe
 
 .checklist .nichts { color: var(--muted); }
 .checklist .unklar .icon, .checklist .folgt .icon { color: var(--bad); }
+
+/* Neuer Aufbau */
+.statusfoot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.chip.prio { color: #b91c1c; }
+.chip.prio.on { background: #fee2e2; border-color: #b91c1c; font-weight: 700; }
+#mehr h3 { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: #6b7280; }
+#mehr .kern { margin-top: 6px; }
